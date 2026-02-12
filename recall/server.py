@@ -15,8 +15,9 @@ from os import getenv
 from typing import Any, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from recall.agents import dash, dash_knowledge, dash_learnings
 from recall.tools import create_save_validated_query_tool
@@ -42,25 +43,110 @@ app = FastAPI(
 )
 
 # ============================================================================
+# CORS Middleware for MCP Clients
+# ============================================================================
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ============================================================================
 # Request/Response Models
 # ============================================================================
 
 class QueryRequest(BaseModel):
-    question: str
-    use_learning: bool = True
-    run_id: Optional[str] = None
+    question: str = Field(..., min_length=1, max_length=5000, description="Natural language question")
+    use_learning: bool = Field(default=True, description="Enable learning retrieval")
+    run_id: Optional[str] = Field(default=None, max_length=100, description="Correlation ID for tracing")
+    
+    @field_validator('question')
+    @classmethod
+    def validate_question(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Question cannot be empty or whitespace")
+        return v.strip()
 
 class QueryResponse(BaseModel):
     result: str
     status: str = "success"
 
 class SaveQueryRequest(BaseModel):
-    name: str
-    question: str
-    query: str
-    summary: Optional[str] = None
-    tables_used: Optional[list[str]] = None
-    data_quality_notes: Optional[str] = None
+    name: str = Field(..., min_length=1, max_length=100, description="Query identifier")
+    question: str = Field(..., min_length=1, max_length=1000, description="Original question")
+    query: str = Field(..., min_length=1, max_length=10000, description="SQL query")
+    summary: Optional[str] = Field(default=None, max_length=500, description="Query description")
+    tables_used: Optional[list[str]] = Field(default=None, description="Tables referenced")
+    data_quality_notes: Optional[str] = Field(default=None, max_length=1000, description="Data quality issues")
+    
+    @field_validator('name', 'question', 'query')
+    @classmethod
+    def validate_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Field cannot be empty or whitespace")
+        return v.strip()
+    
+    @field_validator('query')
+    @classmethod
+    def validate_query_safe(cls, v: str) -> str:
+        query_lower = v.lower()
+        if not (query_lower.strip().startswith('select') or query_lower.strip().startswith('with')):
+            raise ValueError("Only SELECT or WITH queries are allowed")
+        return v
+
+# ============================================================================
+# MCP Error Response Format
+# ============================================================================
+
+class MCPErrorResponse(BaseModel):
+    error: str
+    code: str
+    details: Optional[dict] = None
+
+# ============================================================================
+# Exception Handlers
+# ============================================================================
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Format HTTP exceptions as MCP error responses."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "code": f"HTTP_{exc.status_code}",
+            "path": str(request.url.path)
+        }
+    )
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    """Format validation errors as MCP error responses."""
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": str(exc),
+            "code": "VALIDATION_ERROR",
+            "path": str(request.url.path)
+        }
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Format general exceptions as MCP error responses."""
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "code": "INTERNAL_ERROR",
+            "path": str(request.url.path),
+            "details": {"type": type(exc).__name__}
+        }
+    )
 
 # ============================================================================
 # Authentication Middleware
@@ -106,9 +192,6 @@ async def ask_data_agent(request: QueryRequest) -> QueryResponse:
     The agent generates SQL queries, executes them, and provides insights.
     When errors occur, it self-corrects and persists the fix for future queries.
     """
-    if not request.question or not request.question.strip():
-        raise HTTPException(status_code=400, detail="Question cannot be empty")
-    
     logger.info(f"[ask_data_agent] Question: {request.question[:100]}... | run_id={request.run_id}")
     
     try:
@@ -123,13 +206,16 @@ async def ask_data_agent(request: QueryRequest) -> QueryResponse:
         else:
             result = str(response)
         
-        logger.info(f"[ask_data_agent] Success | run_id={request.run_id}")
+        logger.info(f"[ask_data_agent] Success | run_id={request.run_id} | length={len(result)}")
         return QueryResponse(result=result, status="success")
         
     except Exception as e:
-        error_msg = f"Error processing question: {str(e)}"
+        error_msg = f"Agent execution failed: {str(e)}"
         logger.error(f"[ask_data_agent] {error_msg} | run_id={request.run_id}", exc_info=True)
-        raise HTTPException(status_code=500, detail=error_msg)
+        raise HTTPException(
+            status_code=500, 
+            detail=error_msg
+        )
 
 
 @app.post("/mcp/tools/save_verified_query")
@@ -154,11 +240,18 @@ async def save_verified_query(request: SaveQueryRequest) -> dict:
             data_quality_notes=request.data_quality_notes
         )
         logger.info(f"[save_verified_query] Result: {result}")
-        return {"status": "success", "message": result}
+        return {
+            "status": "success",
+            "message": result,
+            "query_name": request.name
+        }
     except Exception as e:
-        error_msg = f"Error saving query: {str(e)}"
+        error_msg = f"Failed to save query: {str(e)}"
         logger.error(f"[save_verified_query] {error_msg}", exc_info=True)
-        raise HTTPException(status_code=500, detail=error_msg)
+        raise HTTPException(
+            status_code=500,
+            detail=error_msg
+        )
 
 
 # ============================================================================
