@@ -25,7 +25,13 @@ from agno.vectordb.pgvector import PgVector, SearchType
 
 from recall.context.business_rules import BUSINESS_CONTEXT
 from recall.context.semantic_model import SEMANTIC_MODEL_STR
-from recall.tools import create_introspect_schema_tool, create_save_validated_query_tool
+from recall.tools import (
+    create_introspect_schema_tool,
+    create_learning_count_tool,
+    create_retrieve_learnings_tool,
+    create_save_learning_tool,
+    create_save_validated_query_tool,
+)
 from db import db_url, get_postgres_db
 
 # ============================================================================
@@ -64,11 +70,17 @@ dash_learnings = Knowledge(
 
 save_validated_query = create_save_validated_query_tool(dash_knowledge)
 introspect_schema = create_introspect_schema_tool(db_url)
+save_learning = create_save_learning_tool()
+retrieve_learnings = create_retrieve_learnings_tool()
+learning_stats = create_learning_count_tool()
 
 base_tools: list = [
     SQLTools(db_url=db_url),
     save_validated_query,
     introspect_schema,
+    save_learning,
+    retrieve_learnings,
+    learning_stats,
     MCPTools(url=f"https://mcp.exa.ai/mcp?exaApiKey={getenv('EXA_API_KEY', '')}&tools=web_search_exa"),
 ]
 
@@ -96,16 +108,24 @@ Your goal: make the user look like they've been working with this data for years
 - Searched automatically before each response
 - Add successful queries here with `save_validated_query`
 
-**Learnings** (dynamic, discovered):
+**Learnings** (dynamic, persistent):
 - Patterns YOU discover through errors and fixes
 - Type gotchas, date formats, column quirks
-- Search with `search_learnings`, save with `save_learning`
+- **PERSISTS ACROSS RESTARTS** - survives pod restarts
+- Search with `retrieve_learnings`, save with `save_learning`
+- Check stats with `get_learning_stats`
 
 ## Workflow
 
-1. Always start with `search_knowledge_base` and `search_learnings` for table info, patterns, gotchas. Context that will help you write the best possible SQL.
+1. **Always start** with `search_knowledge_base` AND `retrieve_learnings` for:
+   - Table info, column types, relationships
+   - Known gotchas and error patterns
+   - Previously successful fixes
 2. Write SQL (LIMIT 50, no SELECT *, ORDER BY for rankings)
-3. If error → `introspect_schema` → fix → `save_learning`
+3. If error:
+   - Use `introspect_schema` to inspect actual table structure
+   - Fix the query based on findings
+   - **ALWAYS call `save_learning`** to persist the fix
 4. Provide **insights**, not just data, based on the context you found.
 5. Offer `save_validated_query` if the query is reusable.
 
@@ -115,7 +135,10 @@ After fixing a type error:
 ```
 save_learning(
   title="drivers_championship position is TEXT",
-  learning="Use position = '1' not position = 1"
+  error_pattern="operator does not exist: text = integer",
+  fix_description="Use position = '1' not position = 1",
+  error_type="type_mismatch",
+  tables_involved=["drivers_championship"]
 )
 ```
 
@@ -123,7 +146,10 @@ After discovering a date format:
 ```
 save_learning(
   title="race_wins date parsing",
-  learning="Use TO_DATE(date, 'DD Mon YYYY') to extract year"
+  error_pattern="invalid input syntax for type date",
+  fix_description="Use TO_DATE(date, 'DD Mon YYYY') to extract year",
+  error_type="date_format",
+  tables_involved=["race_wins"]
 )
 ```
 
@@ -131,9 +157,20 @@ After a user corrects you:
 ```
 save_learning(
   title="Constructors Championship started 1958",
-  learning="No constructors data before 1958"
+  error_pattern="Query returned unexpected results for pre-1958",
+  fix_description="No constructors data before 1958 - filter by year >= 1958",
+  error_type="data_quality",
+  tables_involved=["constructors_championship"]
 )
 ```
+
+## Error Types for save_learning
+- `type_mismatch` - Column type different than expected
+- `date_format` - Date parsing issues
+- `column_name` - Wrong or misspelled column names
+- `null_handling` - NULL value gotchas
+- `syntax` - SQL syntax corrections
+- `data_quality` - Data quirks or missing ranges
 
 ## Insights, Not Just Data
 
