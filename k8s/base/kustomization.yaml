@@ -11,6 +11,7 @@ resources:
   - postgres-statefulset.yaml
   - dash-deployment.yaml
   - dash-service.yaml
+  - ingress.yaml
 
 commonLabels:
   app.kubernetes.io/managed-by: kustomize

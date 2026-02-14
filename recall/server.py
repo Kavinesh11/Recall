@@ -54,7 +54,7 @@ ARCHESTRA_TOKEN_ENDPOINT = getenv("ARCHESTRA_TOKEN_ENDPOINT", "")
 DEBUG_MODE = getenv("DEBUG_MODE", "false").lower() == "true"
 VALID_TOKEN_PREFIX = "Bearer "
 ARCHESTRA_AGENT_ID_HEADER = "X-Archestra-Agent-Id"
-AUTH_WHITELIST = ["/health", "/health/dependencies", "/docs", "/openapi.json", "/redoc", "/"]
+AUTH_WHITELIST = ["/health", "/health/dependencies", "/docs", "/openapi.json", "/redoc", "/metrics", "/"]
 
 # ============================================================================
 # FastAPI App
@@ -251,17 +251,25 @@ async def auth_middleware(request: Request, call_next):
             )
         
         # In production: validate token against Archestra's auth service
-        # try:
-        #     response = httpx.post(
-        #         ARCHESTRA_TOKEN_ENDPOINT,
-        #         json={"token": token},
-        #         timeout=2.0
-        #     )
-        #     if response.status_code != 200:
-        #         return JSONResponse(status_code=401, content={"error": "Invalid token"})
-        # except Exception as e:
-        #     logger.error(f"Token validation failed: {e}")
-        #     return JSONResponse(status_code=503, content={"error": "Auth service unavailable"})
+        if ARCHESTRA_TOKEN_ENDPOINT:
+            try:
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        ARCHESTRA_TOKEN_ENDPOINT,
+                        json={"token": token},
+                        timeout=2.0
+                    )
+                    if response.status_code != 200:
+                        logger.warning(f"✗ Token validation rejected by Archestra | Agent: {agent_id}")
+                        return JSONResponse(status_code=401, content={"error": "Invalid token"})
+            except Exception as e:
+                logger.error(f"Token validation failed: {e}")
+                # Fallback: if auth service is down, decide whether to fail open or closed.
+                # For high security, fail closed:
+                return JSONResponse(status_code=503, content={"error": "Auth service unavailable"})
+        else:
+             logger.info(f"Archestra token endpoint not configured, skipping remote validation for token ending in ...{token[-4:]}")
     
     # Warn if agent ID is missing in production
     if agent_id == "unknown" and ENABLE_AUTH:
