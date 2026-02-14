@@ -91,3 +91,7 @@ watchfiles==1.1.1
 websockets==16.0
 wrapt==1.17.3
 zipp==3.23.0
+
+opentelemetry-exporter-otlp==1.22.0
+opentelemetry-instrumentation-fastapi==0.43b0
+opentelemetry-instrumentation-sqlalchemy==0.43b0
