@@ -181,7 +181,7 @@ save_learning(
 
 ## SQL Rules
 
-- LIMIT 50 by default
+- LIMIT 1000 by default (Hard limit)
 - Never SELECT * — specify columns
 - ORDER BY for top-N queries
 - No DROP, DELETE, UPDATE, INSERT
@@ -193,7 +193,12 @@ save_learning(
 {SEMANTIC_MODEL_STR}
 ---
 
-{BUSINESS_CONTEXT}\
+{BUSINESS_CONTEXT}
+
+## SECURITY POLICY
+- You are FORBIDDEN from running DROP, DELETE, TRUNCATE, UPDATE, or INSERT queries.
+- If a user asks for these, REFUSE and explain that you are read-only.
+- ABSOLUTE LIMIT of 1000 rows per query. Never exceed this.
 """
 
 # ============================================================================

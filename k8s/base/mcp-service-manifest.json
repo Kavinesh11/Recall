@@ -1,0 +1,110 @@
+{
+  "apiVersion": "archestra.io/v1",
+  "kind": "MCPService",
+  "metadata": {
+    "name": "dash-sql-agent",
+    "namespace": "dash-system",
+    "labels": {
+      "app.kubernetes.io/name": "dash",
+      "app.kubernetes.io/component": "mcp-service",
+      "archestra.io/category": "data-agent"
+    }
+  },
+  "spec": {
+    "displayName": "Dash SQL Agent",
+    "description": "Self-learning SQL agent that provides insights from your database. Learns from errors and improves over time.",
+    "version": "1.0.0",
+    "icon": "database",
+    "category": "Data & Analytics",
+    "transport": {
+      "type": "streamable-http",
+      "endpoint": "http://dash-api-service.dash-system.svc.cluster.local:8000",
+      "healthCheck": "/health"
+    },
+    "authentication": {
+      "required": true,
+      "type": "bearer",
+      "headerName": "Authorization"
+    },
+    "tools": [
+      {
+        "name": "ask_data_agent",
+        "description": "Answers natural language questions about your database using SQL",
+        "endpoint": "/mcp/tools/ask_data_agent",
+        "method": "POST",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "question": {
+              "type": "string",
+              "description": "Natural language question about your data"
+            },
+            "use_learning": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether to use learned patterns from past queries"
+            }
+          },
+          "required": ["question"]
+        }
+      },
+      {
+        "name": "save_verified_query",
+        "description": "Saves a successful SQL query to the permanent knowledge base",
+        "endpoint": "/mcp/tools/save_verified_query",
+        "method": "POST",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Short name for the query"
+            },
+            "question": {
+              "type": "string",
+              "description": "Original user question"
+            },
+            "query": {
+              "type": "string",
+              "description": "The SQL query"
+            },
+            "summary": {
+              "type": "string",
+              "description": "What the query does"
+            }
+          },
+          "required": ["name", "question", "query"]
+        }
+      }
+    ],
+    "resources": [
+      {
+        "name": "schema",
+        "description": "Current database schema tracked by Dash",
+        "endpoint": "/mcp/resources/schema",
+        "method": "GET"
+      },
+      {
+        "name": "learnings",
+        "description": "Error patterns and fixes discovered by Dash",
+        "endpoint": "/mcp/resources/learnings",
+        "method": "GET"
+      }
+    ],
+    "capabilities": {
+      "selfLearning": true,
+      "vectorSearch": true,
+      "sqlGeneration": true,
+      "errorCorrection": true
+    },
+    "limits": {
+      "maxResultRows": 1000,
+      "requestTimeoutSeconds": 30
+    },
+    "securityPolicies": {
+      "blockedKeywords": ["DROP", "DELETE", "TRUNCATE", "ALTER", "CREATE", "INSERT", "UPDATE"],
+      "outputFilters": ["pii", "credit_card", "ssn"],
+      "maxRequestsPerMinute": 60
+    }
+  }
+}
