@@ -15,10 +15,19 @@ from os import getenv
 from typing import Any, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from recall.agents import dash, dash_knowledge, dash_learnings
+from recall.observability import (
+    get_metrics,
+    get_metrics_content_type,
+    record_query_error,
+    record_query_failure,
+    record_query_success,
+    refresh_learning_count,
+    track_query_latency,
+)
 from recall.tools import create_save_validated_query_tool
 
 # ============================================================================
@@ -74,8 +83,8 @@ async def auth_middleware(request: Request, call_next):
     In production, this would validate the token against Archestra's auth service.
     For development, we log the headers and allow requests through.
     """
-    # Skip auth for health/docs endpoints
-    if request.url.path in ["/health", "/docs", "/openapi.json", "/redoc"]:
+    # Skip auth for health/docs/metrics endpoints
+    if request.url.path in ["/health", "/docs", "/openapi.json", "/redoc", "/metrics"]:
         return await call_next(request)
     
     # Log agent identity from Archestra
@@ -111,25 +120,27 @@ async def ask_data_agent(request: QueryRequest) -> QueryResponse:
     
     logger.info(f"[ask_data_agent] Question: {request.question[:100]}... | run_id={request.run_id}")
     
-    try:
-        # Run the agent with the question
-        response = await dash.arun(request.question)
-        
-        # Extract content from response
-        if hasattr(response, 'content'):
-            result = response.content
-        elif isinstance(response, str):
-            result = response
-        else:
-            result = str(response)
-        
-        logger.info(f"[ask_data_agent] Success | run_id={request.run_id}")
-        return QueryResponse(result=result, status="success")
-        
-    except Exception as e:
-        error_msg = f"Error processing question: {str(e)}"
-        logger.error(f"[ask_data_agent] {error_msg} | run_id={request.run_id}", exc_info=True)
-        raise HTTPException(status_code=500, detail=error_msg)
+    with track_query_latency():
+        try:
+            response = await dash.arun(request.question)
+            
+            if hasattr(response, 'content'):
+                result = response.content
+            elif isinstance(response, str):
+                result = response
+            else:
+                result = str(response)
+            
+            record_query_success()
+            logger.info(f"[ask_data_agent] Success | run_id={request.run_id}")
+            return QueryResponse(result=result, status="success")
+            
+        except Exception as e:
+            record_query_failure()
+            record_query_error(type(e).__name__)
+            error_msg = f"Error processing question: {str(e)}"
+            logger.error(f"[ask_data_agent] {error_msg} | run_id={request.run_id}", exc_info=True)
+            raise HTTPException(status_code=500, detail=error_msg)
 
 
 @app.post("/mcp/tools/save_verified_query")
@@ -261,6 +272,27 @@ async def health_check():
         "version": "1.0.0"
     }
 
+
+@app.get("/metrics")
+async def metrics():
+    """
+    Prometheus metrics endpoint for observability.
+    
+    Exposes:
+    - dash_queries_total: Total queries processed
+    - dash_query_errors: Query errors by type
+    - dash_learnings_saved: Learnings saved by type
+    - dash_learnings_total: Current total learnings
+    - dash_query_latency_seconds: Query latency histogram
+    - llm_token_usage: LLM token usage histogram
+    """
+    await refresh_learning_count()
+    return Response(
+        content=get_metrics(),
+        media_type=get_metrics_content_type()
+    )
+
+
 @app.get("/")
 async def root():
     """Root endpoint with service information."""
@@ -270,6 +302,7 @@ async def root():
         "description": "Self-learning SQL agent for Archestra",
         "endpoints": {
             "health": "/health",
+            "metrics": "/metrics",
             "ask_data_agent": "/mcp/tools/ask_data_agent",
             "save_verified_query": "/mcp/tools/save_verified_query",
             "schema": "/mcp/resources/schema",

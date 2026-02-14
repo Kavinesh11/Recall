@@ -20,6 +20,12 @@ from db.learning_store import LearningStore
 
 logger = logging.getLogger(__name__)
 
+try:
+    from recall.observability import record_learning_saved
+except ImportError:
+    def record_learning_saved(error_type: str = "unknown"):
+        pass
+
 
 @lru_cache(maxsize=1)
 def get_embedder() -> Callable[[str], list[float]]:
@@ -114,6 +120,7 @@ def create_save_learning_tool():
             )
             
             if success:
+                record_learning_saved(error_type or "unknown")
                 logger.info(f"[save_learning] Saved: {title}")
                 return f"Learning saved: {title}"
             else:
