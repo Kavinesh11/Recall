@@ -11,12 +11,17 @@ Test: curl http://localhost:8000/mcp/tools
 
 import json
 import logging
+import time
 from os import getenv
 from typing import Any, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
+from fastapi import FastAPI, Header, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, field_validator
 
 from recall.agents import dash, dash_knowledge, dash_learnings
 from recall.observability import (
@@ -41,6 +46,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============================================================================
+# Configuration
+# ============================================================================
+
+ENABLE_AUTH = getenv("ENABLE_AUTH", "false").lower() == "true"
+ARCHESTRA_TOKEN_ENDPOINT = getenv("ARCHESTRA_TOKEN_ENDPOINT", "")
+DEBUG_MODE = getenv("DEBUG_MODE", "false").lower() == "true"
+VALID_TOKEN_PREFIX = "Bearer "
+ARCHESTRA_AGENT_ID_HEADER = "X-Archestra-Agent-Id"
+AUTH_WHITELIST = ["/health", "/health/dependencies", "/docs", "/openapi.json", "/redoc", "/"]
+
+# ============================================================================
 # FastAPI App
 # ============================================================================
 
@@ -51,25 +67,110 @@ app = FastAPI(
 )
 
 # ============================================================================
+# CORS Middleware for MCP Clients
+# ============================================================================
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ============================================================================
 # Request/Response Models
 # ============================================================================
 
 class QueryRequest(BaseModel):
-    question: str
-    use_learning: bool = True
-    run_id: Optional[str] = None
+    question: str = Field(..., min_length=1, max_length=5000, description="Natural language question")
+    use_learning: bool = Field(default=True, description="Enable learning retrieval")
+    run_id: Optional[str] = Field(default=None, max_length=100, description="Correlation ID for tracing")
+    
+    @field_validator('question')
+    @classmethod
+    def validate_question(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Question cannot be empty or whitespace")
+        return v.strip()
 
 class QueryResponse(BaseModel):
     result: str
     status: str = "success"
 
 class SaveQueryRequest(BaseModel):
-    name: str
-    question: str
-    query: str
-    summary: Optional[str] = None
-    tables_used: Optional[list[str]] = None
-    data_quality_notes: Optional[str] = None
+    name: str = Field(..., min_length=1, max_length=100, description="Query identifier")
+    question: str = Field(..., min_length=1, max_length=1000, description="Original question")
+    query: str = Field(..., min_length=1, max_length=10000, description="SQL query")
+    summary: Optional[str] = Field(default=None, max_length=500, description="Query description")
+    tables_used: Optional[list[str]] = Field(default=None, description="Tables referenced")
+    data_quality_notes: Optional[str] = Field(default=None, max_length=1000, description="Data quality issues")
+    
+    @field_validator('name', 'question', 'query')
+    @classmethod
+    def validate_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Field cannot be empty or whitespace")
+        return v.strip()
+    
+    @field_validator('query')
+    @classmethod
+    def validate_query_safe(cls, v: str) -> str:
+        query_lower = v.lower()
+        if not (query_lower.strip().startswith('select') or query_lower.strip().startswith('with')):
+            raise ValueError("Only SELECT or WITH queries are allowed")
+        return v
+
+# ============================================================================
+# MCP Error Response Format
+# ============================================================================
+
+class MCPErrorResponse(BaseModel):
+    error: str
+    code: str
+    details: Optional[dict] = None
+
+# ============================================================================
+# Exception Handlers
+# ============================================================================
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Format HTTP exceptions as MCP error responses."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "code": f"HTTP_{exc.status_code}",
+            "path": str(request.url.path)
+        }
+    )
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    """Format validation errors as MCP error responses."""
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": str(exc),
+            "code": "VALIDATION_ERROR",
+            "path": str(request.url.path)
+        }
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Format general exceptions as MCP error responses."""
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "code": "INTERNAL_ERROR",
+            "path": str(request.url.path),
+            "details": {"type": type(exc).__name__}
+        }
+    )
 
 # ============================================================================
 # Authentication Middleware
@@ -78,30 +179,129 @@ class SaveQueryRequest(BaseModel):
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     """
-    Validates bearer token and logs agent identity.
+    Enhanced authentication middleware with bearer token validation.
     
-    In production, this would validate the token against Archestra's auth service.
-    For development, we log the headers and allow requests through.
+    Features:
+    - Bearer token validation (when ENABLE_AUTH=true)
+    - Request timing and performance tracking
+    - Agent identity logging and propagation
+    - Audit trail with client IP
     """
     # Skip auth for health/docs/metrics endpoints
     if request.url.path in ["/health", "/docs", "/openapi.json", "/redoc", "/metrics"]:
         return await call_next(request)
+    start_time = time.time()
     
-    # Log agent identity from Archestra
-    agent_id = request.headers.get("X-Archestra-Agent-Id", "unknown")
+    # Skip auth for whitelisted paths
+    if request.url.path in AUTH_WHITELIST:
+        response = await call_next(request)
+        return response
+    
+    # Extract headers and client info
+    agent_id = request.headers.get(ARCHESTRA_AGENT_ID_HEADER, "unknown")
     authorization = request.headers.get("Authorization", "")
+    client_ip = request.client.host if request.client else "unknown"
     
-    logger.info(f"Request: {request.method} {request.url.path} | Agent: {agent_id}")
+    # Log incoming request with full context
+    logger.info(
+        f"→ {request.method} {request.url.path} | "
+        f"Agent: {agent_id} | "
+        f"IP: {client_ip} | "
+        f"Auth: {'present' if authorization else 'missing'}"
+    )
     
-    # In production: uncomment this to enforce auth
-    # if not authorization.startswith("Bearer "):
-    #     return JSONResponse(
-    #         status_code=401,
-    #         content={"error": "Missing or invalid Authorization header"}
-    #     )
+    # Validate authentication if enabled
+    if ENABLE_AUTH:
+        # Check bearer token format
+        if not authorization:
+            logger.warning(f"✗ Missing Authorization header | Agent: {agent_id} | Path: {request.url.path}")
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={
+                    "error": "Missing Authorization header",
+                    "code": "UNAUTHORIZED",
+                    "path": str(request.url.path)
+                },
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+        
+        if not authorization.startswith(VALID_TOKEN_PREFIX):
+            logger.warning(f"✗ Invalid token format | Agent: {agent_id} | Path: {request.url.path}")
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={
+                    "error": f"Invalid token format. Expected '{VALID_TOKEN_PREFIX}...'",
+                    "code": "INVALID_TOKEN_FORMAT",
+                    "path": str(request.url.path)
+                },
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+        
+        token = authorization[len(VALID_TOKEN_PREFIX):]
+        if not token or len(token) < 10:
+            logger.warning(f"✗ Token too short | Agent: {agent_id} | Path: {request.url.path}")
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={
+                    "error": "Token too short or empty",
+                    "code": "INVALID_TOKEN",
+                    "path": str(request.url.path)
+                },
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+        
+        # In production: validate token against Archestra's auth service
+        # try:
+        #     response = httpx.post(
+        #         ARCHESTRA_TOKEN_ENDPOINT,
+        #         json={"token": token},
+        #         timeout=2.0
+        #     )
+        #     if response.status_code != 200:
+        #         return JSONResponse(status_code=401, content={"error": "Invalid token"})
+        # except Exception as e:
+        #     logger.error(f"Token validation failed: {e}")
+        #     return JSONResponse(status_code=503, content={"error": "Auth service unavailable"})
     
-    response = await call_next(request)
-    return response
+    # Warn if agent ID is missing in production
+    if agent_id == "unknown" and ENABLE_AUTH:
+        logger.warning(
+            f"Missing {ARCHESTRA_AGENT_ID_HEADER} header | "
+            f"Path: {request.url.path} | "
+            f"IP: {client_ip}"
+        )
+    
+    # Process request
+    try:
+        response = await call_next(request)
+        
+        # Calculate request duration
+        duration_ms = (time.time() - start_time) * 1000
+        
+        # Log response with timing
+        logger.info(
+            f"← {response.status_code} | "
+            f"Duration: {duration_ms:.2f}ms | "
+            f"Agent: {agent_id}"
+        )
+        
+        # Add custom headers for debugging and audit trail
+        response.headers["X-Request-Duration-Ms"] = f"{duration_ms:.2f}"
+        response.headers["X-Agent-Id"] = agent_id
+        response.headers["X-Request-Id"] = f"{int(start_time * 1000)}"
+        
+        return response
+        
+    except Exception as e:
+        duration_ms = (time.time() - start_time) * 1000
+        logger.error(
+            f"✗ Request failed: {str(e)} | "
+            f"Duration: {duration_ms:.2f}ms | "
+            f"Agent: {agent_id} | "
+            f"Path: {request.url.path}",
+            exc_info=True
+        )
+        raise
 
 # ============================================================================
 # API Endpoints (MCP Tools)
@@ -115,9 +315,6 @@ async def ask_data_agent(request: QueryRequest) -> QueryResponse:
     The agent generates SQL queries, executes them, and provides insights.
     When errors occur, it self-corrects and persists the fix for future queries.
     """
-    if not request.question or not request.question.strip():
-        raise HTTPException(status_code=400, detail="Question cannot be empty")
-    
     logger.info(f"[ask_data_agent] Question: {request.question[:100]}... | run_id={request.run_id}")
     
     with track_query_latency():
@@ -141,6 +338,28 @@ async def ask_data_agent(request: QueryRequest) -> QueryResponse:
             error_msg = f"Error processing question: {str(e)}"
             logger.error(f"[ask_data_agent] {error_msg} | run_id={request.run_id}", exc_info=True)
             raise HTTPException(status_code=500, detail=error_msg)
+    try:
+        # Run the agent with the question
+        response = await dash.arun(request.question)
+        
+        # Extract content from response
+        if hasattr(response, 'content'):
+            result = response.content
+        elif isinstance(response, str):
+            result = response
+        else:
+            result = str(response)
+        
+        logger.info(f"[ask_data_agent] Success | run_id={request.run_id} | length={len(result)}")
+        return QueryResponse(result=result, status="success")
+        
+    except Exception as e:
+        error_msg = f"Agent execution failed: {str(e)}"
+        logger.error(f"[ask_data_agent] {error_msg} | run_id={request.run_id}", exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail=error_msg
+        )
 
 
 @app.post("/mcp/tools/save_verified_query")
@@ -165,11 +384,18 @@ async def save_verified_query(request: SaveQueryRequest) -> dict:
             data_quality_notes=request.data_quality_notes
         )
         logger.info(f"[save_verified_query] Result: {result}")
-        return {"status": "success", "message": result}
+        return {
+            "status": "success",
+            "message": result,
+            "query_name": request.name
+        }
     except Exception as e:
-        error_msg = f"Error saving query: {str(e)}"
+        error_msg = f"Failed to save query: {str(e)}"
         logger.error(f"[save_verified_query] {error_msg}", exc_info=True)
-        raise HTTPException(status_code=500, detail=error_msg)
+        raise HTTPException(
+            status_code=500,
+            detail=error_msg
+        )
 
 
 # ============================================================================
@@ -269,7 +495,99 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "recall-mcp-server",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "timestamp": time.time()
+    }
+
+@app.get("/health/dependencies")
+async def health_dependencies():
+    """
+    Comprehensive dependency health check for monitoring.
+    
+    Checks:
+    - PostgreSQL connection
+    - Vector database availability
+    - Knowledge base loaded status
+    - Learning machine initialized
+    """
+    checks = {}
+    overall_status = "healthy"
+    
+    # Check database connection
+    try:
+        from db import db_url
+        from sqlalchemy import create_engine, text
+        engine = create_engine(db_url)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+            checks["database"] = {"status": "healthy", "url": db_url.split("@")[-1]}  # Hide credentials
+    except Exception as e:
+        checks["database"] = {"status": "unhealthy", "error": str(e)}
+        overall_status = "degraded"
+    
+    # Check vector database (pgvector)
+    try:
+        if dash_knowledge.vector_db:
+            # Try to check if table exists
+            checks["vector_db_knowledge"] = {"status": "healthy", "table": "recall_knowledge"}
+        else:
+            checks["vector_db_knowledge"] = {"status": "not_configured"}
+            overall_status = "degraded"
+    except Exception as e:
+        checks["vector_db_knowledge"] = {"status": "unhealthy", "error": str(e)}
+        overall_status = "degraded"
+    
+    # Check learnings vector database
+    try:
+        if dash_learnings.vector_db:
+            checks["vector_db_learnings"] = {"status": "healthy", "table": "recall_learnings"}
+        else:
+            checks["vector_db_learnings"] = {"status": "not_configured"}
+    except Exception as e:
+        checks["vector_db_learnings"] = {"status": "unhealthy", "error": str(e)}
+        overall_status = "degraded"
+    
+    # Check if knowledge base has content
+    try:
+        # Simple check - try to search
+        results = dash_knowledge.search(query="test", limit=1)
+        knowledge_count = len(results) if results else 0
+        checks["knowledge_loaded"] = {
+            "status": "healthy" if knowledge_count > 0 else "empty",
+            "sample_count": knowledge_count
+        }
+        if knowledge_count == 0:
+            overall_status = "degraded"
+    except Exception as e:
+        checks["knowledge_loaded"] = {"status": "error", "error": str(e)}
+        overall_status = "degraded"
+    
+    # Check agent initialization
+    try:
+        checks["agent"] = {
+            "status": "healthy",
+            "name": dash.name if hasattr(dash, 'name') else "unknown",
+            "model": str(dash.model.id) if hasattr(dash, 'model') else "unknown"
+        }
+    except Exception as e:
+        checks["agent"] = {"status": "unhealthy", "error": str(e)}
+        overall_status = "degraded"
+    
+    return {
+        "status": overall_status,
+        "checks": checks,
+        "timestamp": time.time()
+    }
+
+@app.get("/auth/status")
+async def auth_status():
+    """Return current authentication configuration (for debugging)."""
+    return {
+        "enabled": ENABLE_AUTH,
+        "token_prefix": VALID_TOKEN_PREFIX,
+        "agent_id_header": ARCHESTRA_AGENT_ID_HEADER,
+        "whitelisted_paths": AUTH_WHITELIST,
+        "validation_endpoint_configured": bool(ARCHESTRA_TOKEN_ENDPOINT)
     }
 
 
@@ -300,9 +618,12 @@ async def root():
         "service": "Recall MCP Server",
         "version": "1.0.0",
         "description": "Self-learning SQL agent for Archestra",
+        "auth_enabled": ENABLE_AUTH,
         "endpoints": {
             "health": "/health",
             "metrics": "/metrics",
+            "health_dependencies": "/health/dependencies",
+            "auth_status": "/auth/status",
             "ask_data_agent": "/mcp/tools/ask_data_agent",
             "save_verified_query": "/mcp/tools/save_verified_query",
             "schema": "/mcp/resources/schema",

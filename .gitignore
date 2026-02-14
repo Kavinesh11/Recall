@@ -62,10 +62,15 @@ tmp
 .claude
 
 # =========================
-# Documentation (exclude except README)
+# Documentation (exclude except README and deployment docs)
 # =========================
 *.md
 !README.md
+!DEPLOYMENT.md
+!DEV_A_COMPLETION.md
+!CLAUDE.md
+!Project.md
+!Prompt.md
 
 # Optional: local PyPI creds (uncomment if you ever create it)
 # .pypirc
