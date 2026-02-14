@@ -14,6 +14,7 @@ import logging
 import time
 from os import getenv
 from typing import Any, Optional
+from opentelemetry import trace
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -22,6 +23,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
+
 
 from recall.agents import dash, dash_knowledge, dash_learnings
 from recall.observability import (
@@ -32,8 +34,11 @@ from recall.observability import (
     record_query_success,
     refresh_learning_count,
     track_query_latency,
+    init_telemetry,
 )
 from recall.tools import create_save_validated_query_tool
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
 # ============================================================================
 # Logging Configuration
@@ -56,6 +61,12 @@ VALID_TOKEN_PREFIX = "Bearer "
 ARCHESTRA_AGENT_ID_HEADER = "X-Archestra-Agent-Id"
 AUTH_WHITELIST = ["/health", "/health/dependencies", "/docs", "/openapi.json", "/redoc", "/metrics", "/"]
 
+# Initialize Telemetry
+init_telemetry("dash-mcp-server")
+SQLAlchemyInstrumentor().instrument(enable_commenter=True, commenter_options={})
+
+tracer = trace.get_tracer(__name__)
+
 # ============================================================================
 # FastAPI App
 # ============================================================================
@@ -65,6 +76,9 @@ app = FastAPI(
     description="Self-learning SQL agent for Archestra orchestration",
     version="1.0.0"
 )
+
+# Instrument FastAPI
+FastAPIInstrumentor.instrument_app(app)
 
 # ============================================================================
 # CORS Middleware for MCP Clients
@@ -315,6 +329,9 @@ async def auth_middleware(request: Request, call_next):
 # API Endpoints (MCP Tools)
 # ============================================================================
 
+
+# ... existing code ...
+
 @app.post("/mcp/tools/ask_data_agent", response_model=QueryResponse)
 async def ask_data_agent(request: QueryRequest) -> QueryResponse:
     """
@@ -327,15 +344,34 @@ async def ask_data_agent(request: QueryRequest) -> QueryResponse:
     
     with track_query_latency():
         try:
-            response = await dash.arun(request.question)
-            
-            if hasattr(response, 'content'):
-                result = response.content
-            elif isinstance(response, str):
-                result = response
-            else:
-                result = str(response)
-            
+            with tracer.start_as_current_span("dash.reasoning") as span:
+                span.set_attribute("dash.question", request.question)
+                if request.run_id:
+                    span.set_attribute("dash.run_id", request.run_id)
+                
+                response = await dash.arun(request.question)
+                
+                # Extract content
+                if hasattr(response, 'content'):
+                    result = response.content
+                elif isinstance(response, str):
+                    result = response
+                else:
+                    result = str(response)
+                
+                # Try to record token usage if available
+                if hasattr(response, 'metrics') and isinstance(response.metrics, dict):
+                    prompt_tokens = response.metrics.get("prompt_tokens", 0)
+                    completion_tokens = response.metrics.get("completion_tokens", 0)
+                    total_tokens = response.metrics.get("total_tokens", 0)
+                    
+                    if total_tokens > 0:
+                        from recall.observability import record_token_usage
+                        # Assuming model name is available or default to gpt-4
+                        model_name = getattr(response, "model", "gpt-5.2")
+                        record_token_usage(model_name, prompt_tokens, completion_tokens)
+                        span.set_attribute("llm.active_tokens", total_tokens)
+
             record_query_success()
             logger.info(f"[ask_data_agent] Success | run_id={request.run_id}")
             return QueryResponse(result=result, status="success")
@@ -346,28 +382,6 @@ async def ask_data_agent(request: QueryRequest) -> QueryResponse:
             error_msg = f"Error processing question: {str(e)}"
             logger.error(f"[ask_data_agent] {error_msg} | run_id={request.run_id}", exc_info=True)
             raise HTTPException(status_code=500, detail=error_msg)
-    try:
-        # Run the agent with the question
-        response = await dash.arun(request.question)
-        
-        # Extract content from response
-        if hasattr(response, 'content'):
-            result = response.content
-        elif isinstance(response, str):
-            result = response
-        else:
-            result = str(response)
-        
-        logger.info(f"[ask_data_agent] Success | run_id={request.run_id} | length={len(result)}")
-        return QueryResponse(result=result, status="success")
-        
-    except Exception as e:
-        error_msg = f"Agent execution failed: {str(e)}"
-        logger.error(f"[ask_data_agent] {error_msg} | run_id={request.run_id}", exc_info=True)
-        raise HTTPException(
-            status_code=500, 
-            detail=error_msg
-        )
 
 
 @app.post("/mcp/tools/save_verified_query")
