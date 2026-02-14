@@ -1,0 +1,52 @@
+graph TD
+    subgraph "Archestra Ecosystem"
+        User[User / Client]
+        Auth[Archestra Auth Service]
+        Registry[MCP Registry]
+    end
+
+    subgraph "Dash Deployment (K8s)"
+        Ingress[Ingress Controller]
+        
+        subgraph "Dash Agent Pod"
+            direction TB
+            API[FastAPI Server]
+            Middleware[Auth & OTEL Middleware]
+            Agent[Dash Agent (Agno)]
+            Tools[SQL & Knowledge Tools]
+            
+            API --> Middleware
+            Middleware --> Agent
+            Agent --> Tools
+        end
+        
+        subgraph "Data Persistence"
+            DB[(PostgreSQL)]
+            Vector[(pgvector)]
+            Learnings[(Learnings Store)]
+        end
+        
+        subgraph "Observability"
+            OTEL[OpenTelemetry Collector]
+            Prom[Prometheus]
+            Grafana[Grafana]
+        end
+    end
+
+    User -->|HTTPS / Bearer Token| Ingress
+    Ingress --> API
+    Middleware -.->|Validate Token| Auth
+    Middleware -->|Traces/Metrics| OTEL
+    
+    Tools -->|Query| DB
+    Tools -->|Search| Vector
+    Tools -->|Read/Write| Learnings
+    
+    OTEL --> Prom
+    Prom --> Grafana
+    
+    Agent -.->|Register| Registry
+    
+    style User fill:#f9f,stroke:#333,stroke-width:2px
+    style DB fill:#55f,stroke:#333,stroke-width:2px
+    style Agent fill:#5f5,stroke:#333,stroke-width:2px
