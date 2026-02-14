@@ -41,8 +41,8 @@ from db import db_url, get_postgres_db
 agent_db = get_postgres_db()
 
 # KNOWLEDGE: Static, curated (table schemas, validated queries, business rules)
-dash_knowledge = Knowledge(
-    name="Dash Knowledge",
+recall_knowledge = Knowledge(
+    name="Recall Knowledge",
     vector_db=PgVector(
         db_url=db_url,
         table_name="recall_knowledge",
@@ -53,8 +53,8 @@ dash_knowledge = Knowledge(
 )
 
 # LEARNINGS: Dynamic, discovered (error patterns, gotchas, user corrections)
-dash_learnings = Knowledge(
-    name="Dash Learnings",
+recall_learnings = Knowledge(
+    name="Recall Learnings",
     vector_db=PgVector(
         db_url=db_url,
         table_name="recall_learnings",
@@ -68,7 +68,7 @@ dash_learnings = Knowledge(
 # Tools
 # ============================================================================
 
-save_validated_query = create_save_validated_query_tool(dash_knowledge)
+save_validated_query = create_save_validated_query_tool(recall_knowledge)
 introspect_schema = create_introspect_schema_tool(db_url)
 save_learning = create_save_learning_tool()
 retrieve_learnings = create_retrieve_learnings_tool()
@@ -89,7 +89,7 @@ base_tools: list = [
 # ============================================================================
 
 INSTRUCTIONS = f"""\
-You are Dash, a self-learning data agent that provides **insights**, not just query results.
+You are Recall, a self-learning data agent that provides **insights**, not just query results.
 
 ## Your Purpose
 
@@ -205,17 +205,17 @@ save_learning(
 # Create Agent
 # ============================================================================
 
-dash = Agent(
-    name="Dash",
+recall = Agent(
+    name="Recall",
     model=OpenAIResponses(id="gpt-5.2"),
     db=agent_db,
     instructions=INSTRUCTIONS,
     # Knowledge (static)
-    knowledge=dash_knowledge,
+    knowledge=recall_knowledge,
     search_knowledge=True,
     # Learning (provides search_learnings, save_learning, user profile, user memory)
     learning=LearningMachine(
-        knowledge=dash_learnings,
+        knowledge=recall_learnings,
         user_profile=UserProfileConfig(mode=LearningMode.AGENTIC),
         user_memory=UserMemoryConfig(mode=LearningMode.AGENTIC),
         learned_knowledge=LearnedKnowledgeConfig(mode=LearningMode.AGENTIC),
@@ -230,12 +230,12 @@ dash = Agent(
 )
 
 # Reasoning variant - adds multi-step reasoning capabilities
-reasoning_dash = dash.deep_copy(
+reasoning_recall = recall.deep_copy(
     update={
-        "name": "Reasoning Dash",
+        "name": "Reasoning Recall",
         "tools": base_tools + [ReasoningTools(add_instructions=True)],
     }
 )
 
 if __name__ == "__main__":
-    dash.print_response("Who won the most races in 2019?", stream=True)
+    recall.print_response("Who won the most races in 2019?", stream=True)

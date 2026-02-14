@@ -29,11 +29,11 @@ sys.modules["recall.context.semantic_model"] = MagicMock()
 # Mock recall.agents because it imports agno
 mock_agents = MagicMock()
 sys.modules["recall.agents"] = mock_agents
-# Setup dash agent mock
-mock_dash = MagicMock()
-mock_agents.dash = mock_dash
-mock_agents.dash_knowledge = MagicMock()
-mock_agents.dash_learnings = MagicMock()
+# Setup recall agent mock
+mock_recall = MagicMock()
+mock_agents.recall = mock_recall
+mock_agents.recall_knowledge = MagicMock()
+mock_agents.recall_learnings = MagicMock()
 
 # Mock recall.observability
 mock_observability = MagicMock()
@@ -115,7 +115,7 @@ class TestAuthSecurity(unittest.TestCase):
          # Setup mock result
          # We need to ensure the async run returns a proper object or string
          # The server code checks: hasattr(response, 'content') or isinstance(str)
-         mock_dash.arun = AsyncMock(return_value="Success Result")
+         mock_recall.arun = AsyncMock(return_value="Success Result")
          
          response = client.post(
             "/mcp/tools/ask_data_agent", 

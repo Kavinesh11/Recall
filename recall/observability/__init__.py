@@ -9,12 +9,12 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.semconv.resource import ResourceAttributes
 
 from recall.observability.metrics import (
-    DASH_LEARNINGS_SAVED,
-    DASH_LEARNINGS_TOTAL,
-    DASH_QUERIES_TOTAL,
-    DASH_QUERY_ERRORS,
-    DASH_QUERY_LATENCY,
-    DASH_VECTOR_SEARCH_LATENCY,
+    RECALL_LEARNINGS_SAVED,
+    RECALL_LEARNINGS_TOTAL,
+    RECALL_QUERIES_TOTAL,
+    RECALL_QUERY_ERRORS,
+    RECALL_QUERY_LATENCY,
+    RECALL_VECTOR_SEARCH_LATENCY,
     LLM_TOKEN_USAGE,
     get_metrics,
     get_metrics_content_type,
@@ -32,8 +32,8 @@ from recall.observability.metrics import (
 
 logger = logging.getLogger(__name__)
 
-def init_telemetry(service_name: str = "dash-agent"):
-    """Initialize OpenTelemetry tracing."""
+def init_telemetry(service_name: str = "recall-agent"):
+    """Initialize OpenTelemetry tracing with OTLP or Console exporters."""
     otel_endpoint = os.getenv("ARCHESTRA_OTEL_ENDPOINT")
     
     resource = Resource.create(attributes={
@@ -44,23 +44,26 @@ def init_telemetry(service_name: str = "dash-agent"):
     trace.set_tracer_provider(tracer_provider)
 
     if otel_endpoint:
-        logger.info(f"Initializing OTEL exporter to {otel_endpoint}")
-        exporter = OTLPSpanExporter(endpoint=otel_endpoint)
-        span_processor = BatchSpanProcessor(exporter)
-        tracer_provider.add_span_processor(span_processor)
+        try:
+            exporter = OTLPSpanExporter(endpoint=otel_endpoint)
+            span_processor = BatchSpanProcessor(exporter)
+            tracer_provider.add_span_processor(span_processor)
+            logger.info(f"OTLP exporter configured for {otel_endpoint}")
+        except Exception as e:
+            logger.error(f"Failed to initialize OTLP exporter: {e}. Falling back to ConsoleSpanExporter.", exc_info=True)
+            tracer_provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
     else:
-        logger.info("ARCHESTRA_OTEL_ENDPOINT not set, using ConsoleSpanExporter")
-        # Use Console exporter for debugging if no endpoint
+        logger.info("ARCHESTRA_OTEL_ENDPOINT not set, using ConsoleSpanExporter for local development")
         tracer_provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
 
 __all__ = [
     "init_telemetry",
-    "DASH_LEARNINGS_SAVED",
-    "DASH_LEARNINGS_TOTAL",
-    "DASH_QUERIES_TOTAL",
-    "DASH_QUERY_ERRORS",
-    "DASH_QUERY_LATENCY",
-    "DASH_VECTOR_SEARCH_LATENCY",
+    "RECALL_LEARNINGS_SAVED",
+    "RECALL_LEARNINGS_TOTAL",
+    "RECALL_QUERIES_TOTAL",
+    "RECALL_QUERY_ERRORS",
+    "RECALL_QUERY_LATENCY",
+    "RECALL_VECTOR_SEARCH_LATENCY",
     "LLM_TOKEN_USAGE",
     "get_metrics",
     "get_metrics_content_type",

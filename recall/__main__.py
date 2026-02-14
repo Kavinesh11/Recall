@@ -1,6 +1,6 @@
 """CLI entry point: python -m recall"""
 
-from recall.agents import dash
+from recall.agents import recall
 
 if __name__ == "__main__":
-    dash.cli_app(stream=True)
+    recall.cli_app(stream=True)

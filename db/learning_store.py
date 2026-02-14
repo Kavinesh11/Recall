@@ -145,7 +145,7 @@ class LearningStore:
                     
                     conn.execute(
                         text("""
-                            INSERT INTO dash_learnings 
+                            INSERT INTO recall_learnings 
                                 (title, error_pattern, fix_description, error_type, 
                                  tables_involved, embedding)
                             VALUES 
@@ -249,7 +249,7 @@ class LearningStore:
                 if success:
                     conn.execute(
                         text("""
-                            UPDATE dash_learnings
+                            UPDATE recall_learnings
                             SET usage_count = usage_count + 1,
                                 success_rate = (success_rate * usage_count + 1) / (usage_count + 1)
                             WHERE id = :id
@@ -259,7 +259,7 @@ class LearningStore:
                 else:
                     conn.execute(
                         text("""
-                            UPDATE dash_learnings
+                            UPDATE recall_learnings
                             SET usage_count = usage_count + 1,
                                 success_rate = (success_rate * usage_count) / (usage_count + 1)
                             WHERE id = :id
@@ -274,7 +274,7 @@ class LearningStore:
         """Get total number of learnings in the database."""
         try:
             with self.engine.connect() as conn:
-                result = conn.execute(text("SELECT COUNT(*) FROM dash_learnings"))
+                result = conn.execute(text("SELECT COUNT(*) FROM recall_learnings"))
                 return result.scalar() or 0
         except Exception as e:
             logger.error(f"Error getting learning count: {e}")
@@ -288,7 +288,7 @@ class LearningStore:
                     text("""
                         SELECT id, title, error_pattern, fix_description, 
                                error_type, tables_involved, usage_count, success_rate
-                        FROM dash_learnings
+                        FROM recall_learnings
                         WHERE error_type = :error_type
                         ORDER BY usage_count DESC, success_rate DESC
                     """),

@@ -1,5 +1,5 @@
 """Recall - A self-learning data agent with 6 layers of context."""
 
-from recall.agents import dash, dash_knowledge, dash_learnings, reasoning_dash
+from recall.agents import recall, recall_knowledge, recall_learnings, reasoning_recall
 
-__all__ = ["dash", "reasoning_dash", "dash_knowledge", "dash_learnings"]
+__all__ = ["recall", "reasoning_recall", "recall_knowledge", "recall_learnings"]

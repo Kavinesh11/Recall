@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 
-from recall.agents import dash, dash_knowledge, dash_learnings
+from recall.agents import recall, recall_knowledge, recall_learnings
 from recall.observability import (
     get_metrics,
     get_metrics_content_type,
@@ -62,8 +62,12 @@ ARCHESTRA_AGENT_ID_HEADER = "X-Archestra-Agent-Id"
 AUTH_WHITELIST = ["/health", "/health/dependencies", "/docs", "/openapi.json", "/redoc", "/metrics", "/"]
 
 # Initialize Telemetry
-init_telemetry("dash-mcp-server")
-SQLAlchemyInstrumentor().instrument(enable_commenter=True, commenter_options={})
+init_telemetry("recall-mcp-server")
+try:
+    SQLAlchemyInstrumentor().instrument(enable_commenter=True, commenter_options={})
+    logger.info("SQLAlchemy instrumentation enabled")
+except Exception as e:
+    logger.warning(f"Failed to instrument SQLAlchemy: {e}")
 
 tracer = trace.get_tracer(__name__)
 
@@ -77,8 +81,11 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Instrument FastAPI
-FastAPIInstrumentor.instrument_app(app)
+try:
+    FastAPIInstrumentor.instrument_app(app)
+    logger.info("FastAPI instrumentation enabled")
+except Exception as e:
+    logger.warning(f"Failed to instrument FastAPI: {e}")
 
 # ============================================================================
 # CORS Middleware for MCP Clients
@@ -344,12 +351,12 @@ async def ask_data_agent(request: QueryRequest) -> QueryResponse:
     
     with track_query_latency():
         try:
-            with tracer.start_as_current_span("dash.reasoning") as span:
-                span.set_attribute("dash.question", request.question)
+            with tracer.start_as_current_span("recall.reasoning") as span:
+                span.set_attribute("recall.question", request.question)
                 if request.run_id:
-                    span.set_attribute("dash.run_id", request.run_id)
+                    span.set_attribute("recall.run_id", request.run_id)
                 
-                response = await dash.arun(request.question)
+                response = await recall.arun(request.question)
                 
                 # Extract content
                 if hasattr(response, 'content'):
@@ -396,7 +403,7 @@ async def save_verified_query(request: SaveQueryRequest) -> dict:
     
     try:
         # Use the existing tool from Recall
-        save_tool = create_save_validated_query_tool(dash_knowledge)
+        save_tool = create_save_validated_query_tool(recall_knowledge)
         result = save_tool(
             name=request.name,
             question=request.question,
@@ -434,7 +441,7 @@ async def get_schema() -> dict[str, Any]:
     """
     try:
         # Query the knowledge base for schema information
-        schema_docs = dash_knowledge.search(
+        schema_docs = recall_knowledge.search(
             query="table schema columns structure",
             limit=50
         )
@@ -477,7 +484,7 @@ async def get_learnings() -> dict[str, Any]:
     """
     try:
         # Query the learnings knowledge base
-        learning_docs = dash_learnings.search(
+        learning_docs = recall_learnings.search(
             query="error pattern fix learning",
             limit=100
         )
@@ -549,7 +556,7 @@ async def health_dependencies():
     
     # Check vector database (pgvector)
     try:
-        if dash_knowledge.vector_db:
+        if recall_knowledge.vector_db:
             # Try to check if table exists
             checks["vector_db_knowledge"] = {"status": "healthy", "table": "recall_knowledge"}
         else:
@@ -561,7 +568,7 @@ async def health_dependencies():
     
     # Check learnings vector database
     try:
-        if dash_learnings.vector_db:
+        if recall_learnings.vector_db:
             checks["vector_db_learnings"] = {"status": "healthy", "table": "recall_learnings"}
         else:
             checks["vector_db_learnings"] = {"status": "not_configured"}
@@ -571,8 +578,7 @@ async def health_dependencies():
     
     # Check if knowledge base has content
     try:
-        # Simple check - try to search
-        results = dash_knowledge.search(query="test", limit=1)
+        results = recall_knowledge.search(query="test", max_results=1)
         knowledge_count = len(results) if results else 0
         checks["knowledge_loaded"] = {
             "status": "healthy" if knowledge_count > 0 else "empty",
@@ -588,8 +594,8 @@ async def health_dependencies():
     try:
         checks["agent"] = {
             "status": "healthy",
-            "name": dash.name if hasattr(dash, 'name') else "unknown",
-            "model": str(dash.model.id) if hasattr(dash, 'model') else "unknown"
+            "name": recall.name if hasattr(recall, 'name') else "unknown",
+            "model": str(recall.model.id) if hasattr(recall, 'model') else "unknown"
         }
     except Exception as e:
         checks["agent"] = {"status": "unhealthy", "error": str(e)}
@@ -619,11 +625,11 @@ async def metrics():
     Prometheus metrics endpoint for observability.
     
     Exposes:
-    - dash_queries_total: Total queries processed
-    - dash_query_errors: Query errors by type
-    - dash_learnings_saved: Learnings saved by type
-    - dash_learnings_total: Current total learnings
-    - dash_query_latency_seconds: Query latency histogram
+    - recall_queries_total: Total queries processed
+    - recall_query_errors: Query errors by type
+    - recall_learnings_saved: Learnings saved by type
+    - recall_learnings_total: Current total learnings
+    - recall_query_latency_seconds: Query latency histogram
     - llm_token_usage: LLM token usage histogram
     """
     await refresh_learning_count()

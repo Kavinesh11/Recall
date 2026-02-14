@@ -72,7 +72,7 @@ def run_evals(
         llm_grader: Use LLM to grade responses
         compare_results: Compare actual results against golden SQL results
     """
-    from recall.agents import dash
+    from recall.agents import recall
 
     # Filter tests
     tests = TEST_CASES
@@ -116,7 +116,7 @@ def run_evals(
             test_start = time.time()
 
             try:
-                result = dash.run(test_case.question)
+                result = recall.run(test_case.question)
                 response = result.content or ""
                 duration = time.time() - test_start
 
@@ -384,7 +384,7 @@ def display_summary(results: list[EvalResult], total_duration: float, category: 
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run Dash evaluations")
+    parser = argparse.ArgumentParser(description="Run Recall evaluations")
     parser.add_argument("--category", "-c", choices=CATEGORIES, help="Filter by category")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show full responses on failure")
     parser.add_argument(

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from agno.os import AgentOS
 
-from recall.agents import dash, dash_knowledge, reasoning_dash
+from recall.agents import recall, recall_knowledge, reasoning_recall
 from db import get_postgres_db
 
 # ============================================================================
@@ -23,8 +23,8 @@ agent_os = AgentOS(
     name="Recall",
     tracing=True,
     db=get_postgres_db(),
-    agents=[dash, reasoning_dash],
-    knowledge=[dash_knowledge],
+    agents=[recall, reasoning_recall],
+    knowledge=[recall_knowledge],
     config=str(Path(__file__).parent / "config.yaml"),
 )
 

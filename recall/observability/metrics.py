@@ -2,7 +2,7 @@
 Observability Metrics Module
 ============================
 
-Prometheus metrics for monitoring the Dash learning system.
+Prometheus metrics for monitoring the Recall learning system.
 Exposes metrics for queries, errors, learnings, and LLM token usage.
 """
 
@@ -16,31 +16,31 @@ from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTEN
 
 logger = logging.getLogger(__name__)
 
-DASH_QUERIES_TOTAL = Counter(
-    "dash_queries_total",
-    "Total number of queries processed by Dash agent",
+RECALL_QUERIES_TOTAL = Counter(
+    "recall_queries_total",
+    "Total number of queries processed by Recall agent",
     ["status"],
 )
 
-DASH_QUERY_ERRORS = Counter(
-    "dash_query_errors",
+RECALL_QUERY_ERRORS = Counter(
+    "recall_query_errors",
     "Total number of query errors",
     ["error_type"],
 )
 
-DASH_LEARNINGS_SAVED = Counter(
-    "dash_learnings_saved",
+RECALL_LEARNINGS_SAVED = Counter(
+    "recall_learnings_saved",
     "Total number of learnings saved to the database",
     ["error_type"],
 )
 
-DASH_LEARNINGS_TOTAL = Gauge(
-    "dash_learnings_total",
+RECALL_LEARNINGS_TOTAL = Gauge(
+    "recall_learnings_total",
     "Current total number of learnings in the database",
 )
 
-DASH_QUERY_LATENCY = Histogram(
-    "dash_query_latency_seconds",
+RECALL_QUERY_LATENCY = Histogram(
+    "recall_query_latency_seconds",
     "Query processing latency in seconds",
     buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0],
 )
@@ -52,8 +52,8 @@ LLM_TOKEN_USAGE = Histogram(
     buckets=[10, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
 )
 
-DASH_VECTOR_SEARCH_LATENCY = Histogram(
-    "dash_vector_search_latency_seconds",
+RECALL_VECTOR_SEARCH_LATENCY = Histogram(
+    "recall_vector_search_latency_seconds",
     "Vector similarity search latency in seconds",
     ["search_type"],
     buckets=[0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
@@ -62,27 +62,27 @@ DASH_VECTOR_SEARCH_LATENCY = Histogram(
 
 def record_query_success():
     """Record a successful query."""
-    DASH_QUERIES_TOTAL.labels(status="success").inc()
+    RECALL_QUERIES_TOTAL.labels(status="success").inc()
 
 
 def record_query_failure():
     """Record a failed query."""
-    DASH_QUERIES_TOTAL.labels(status="failure").inc()
+    RECALL_QUERIES_TOTAL.labels(status="failure").inc()
 
 
 def record_query_error(error_type: str):
     """Record a query error by type."""
-    DASH_QUERY_ERRORS.labels(error_type=error_type).inc()
+    RECALL_QUERY_ERRORS.labels(error_type=error_type).inc()
 
 
 def record_learning_saved(error_type: str = "unknown"):
     """Record a learning being saved."""
-    DASH_LEARNINGS_SAVED.labels(error_type=error_type).inc()
+    RECALL_LEARNINGS_SAVED.labels(error_type=error_type).inc()
 
 
 def update_learnings_total(count: int):
     """Update the total learnings gauge."""
-    DASH_LEARNINGS_TOTAL.set(count)
+    RECALL_LEARNINGS_TOTAL.set(count)
 
 
 def record_token_usage(model: str, prompt_tokens: int, completion_tokens: int):
@@ -99,7 +99,7 @@ def track_query_latency() -> Generator[None, None, None]:
         yield
     finally:
         duration = time.perf_counter() - start
-        DASH_QUERY_LATENCY.observe(duration)
+        RECALL_QUERY_LATENCY.observe(duration)
 
 
 @contextmanager
@@ -110,7 +110,7 @@ def track_vector_search_latency(search_type: str = "learning") -> Generator[None
         yield
     finally:
         duration = time.perf_counter() - start
-        DASH_VECTOR_SEARCH_LATENCY.labels(search_type=search_type).observe(duration)
+        RECALL_VECTOR_SEARCH_LATENCY.labels(search_type=search_type).observe(duration)
 
 
 def metrics_decorator(func: Callable) -> Callable:

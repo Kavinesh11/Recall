@@ -9,7 +9,7 @@ from agno.db.postgres import PostgresDb
 
 from db.url import db_url
 
-DB_ID = "dash-db"
+DB_ID = "recall-db"
 
 
 def get_postgres_db(contents_table: str | None = None) -> PostgresDb:
