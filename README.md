@@ -1,246 +1,162 @@
-# Recall
+# Recall: The Self-Learning Data Agent
 
-Recall is a **self-learning data agent** that grounds its answers in **6 layers of context** and improves with every run.
+![Python](https://img.shields.io/badge/python-3.12-blue.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.109-009688.svg)
+![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-Enabled-purple.svg)
+![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)
 
-Inspired by [OpenAI's in-house data agent](https://openai.com/index/inside-our-in-house-data-agent/).
+Recall is a production-ready **SQL Agent** that grounds its answers in **6 layers of context** and **improves with every run**.
 
-## Quick Start
+It solves the "hallucination problem" in Text-to-SQL by treating errors as learning opportunities. When a query fails, Recall diagnosis the issue, fixes it, and **saves the fix** to its permanent memory.
 
-```sh
-# Clone this repo
-git clone https://github.com/Keerthivasan-Venkitajalam/Recall.git && cd Recall
-# Add OPENAI_API_KEY by adding to .env file or export OPENAI_API_KEY=sk-***
+---
+
+## 🏗️ Architecture
+
+Recall sits between your users and your data, ensuring every query is safe, performant, and correct.
+
+```mermaid
+graph TD
+    subgraph "Recall Ecosystem"
+        User[User / Client]
+        Auth[Archestra Auth]
+    end
+
+    subgraph "Recall Agent (K8s)"
+        Ingress[Ingress]
+        
+        subgraph "Pod"
+            API[FastAPI Server]
+            Middleware[Auth & OTEL]
+            Agent[Dash Agent]
+        end
+        
+        subgraph "Persistence"
+            DB[(PostgreSQL)]
+            Vector[(pgvector)]
+        end
+        
+        subgraph "Observability"
+            OTEL[OTEL Collector]
+            Prom[Prometheus]
+            Grafana[Grafana]
+        end
+    end
+
+    User -->|HTTPS| Ingress
+    Ingress --> API
+    Middleware -.->|Validate| Auth
+    Middleware -->|Traces| OTEL
+    
+    Agent -->|Query| DB
+    Agent -->|Search| Vector
+    
+    OTEL --> Prom
+    Prom --> Grafana
+```
+
+---
+
+## 🚀 Key Features
+
+### 🧠 Self-Correction Loop
+Recall doesn't just crash on error. It catches SQL exceptions, reads the error message, reflects on the schema, and **retries**. 
+Once a fix is found (e.g., "Oh, `revenue` is in cents, not dollars"), it saves a **Learning** to prevent the same mistake forever.
+
+### 🛡️ Trusted Data Policy
+Standard LLMs will happily `DROP TABLE users`. Recall implements a strict **Trusted Data Policy**:
+- **Read-Only**: `DROP`, `DELETE`, `INSERT` are blocked at the prompt and middleware level.
+- **Row Limits**: Queries are capped (default 1000 rows) to prevent DOS.
+- **PII Redaction**: (Roadmap) Automatic masking of sensitive columns.
+
+### 👁️ Full Observability
+Production means knowing what's happening. Recall includes:
+- **OpenTelemetry Tracing**: Trace every step of the agent's reasoning chain (`dash.reasoning` spans).
+- **Prometheus Metrics**: 
+  - `dash_queries_total`: Request throughput.
+  - `dash_query_errors`: Error rates by type.
+  - `dash_query_latency_seconds`: p95/p99 latency.
+  - `llm_token_usage`: Cost tracking per model.
+- **Grafana Dashboard**: Pre-built dashboard included in `grafana/dashboard.json`.
+
+---
+
+## ⚡ Quick Start
+
+### Prerequisites
+- Docker & Docker Compose
+- OpenAI API Key
+
+### Run with Docker
+```bash
+# 1. Clone the repo
+git clone https://github.com/Keerthivasan-Venkitajalam/Recall.git
+cd Recall
+
+# 2. Configure Environment
 cp example.env .env
+# Edit .env and set OPENAI_API_KEY=sk-***
 
-# Start the application
+# 3. Start Services (App, DB, Observability)
 docker compose up -d --build
 
-# Load sample data and knowledge
+# 4. Load Sample Data
 docker exec -it recall-api python -m recall.scripts.load_data
-docker exec -it recall-api python -m recall.scripts.load_knowledge
 ```
 
-Confirm Recall is running by navigation to [http://localhost:8000/docs](http://localhost:8000/docs).
+Visit **http://localhost:8000/docs** to see the API Swaggers.
 
-## Connect to the Web UI
+---
 
-1. Open [os.agno.com](https://os.agno.com) and login
-2. Add OS → Local → `http://localhost:8000`
-3. Click "Connect"
+## 🛠️ Configuration
 
-**Try it** (sample F1 dataset):
+Recall is configured via Environment Variables.
 
-- Who won the most F1 World Championships?
-- How many races has Lewis Hamilton won?
-- Compare Ferrari vs Mercedes points 2015-2020
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `OPENAI_API_KEY` | Required for the LLM. | - |
+| `DB_URL` | Postgres connection string. | `postgresql://user:pass@db:5432/recall` |
+| `ENABLE_AUTH` | Enable Bearer token validation. | `false` |
+| `ARCHESTRA_TOKEN_ENDPOINT` | URL to validate tokens against. | - |
+| `ARCHESTRA_OTEL_ENDPOINT` | OTLP gRPC/HTTP endpoint for traces. | - |
 
-## Why Text-to-SQL Breaks in Practice
+---
 
-Our goal is simple: ask a question in english, get a correct, meaningful answer. But raw LLMs writing SQL hit a wall fast:
+## 📊 Observability
 
-- **Schemas lack meaning.**
-- **Types are misleading.**
-- **Tribal knowledge is missing.**
-- **No way to learn from mistakes.**
-- **Results generally lack interpretation.**
+### Metrics
+Recall exposes a standard Prometheus endpoint at `/metrics`.
 
-The root cause is missing context and missing memory.
+### Grafana
+Import `grafana/dashboard.json` to visualize:
+- 📈 **Query Success Rate**
+- ⏱️ **Latency Histograms**
+- 💰 **Token Usage / Cost**
+- 📚 **Learning Rate** (How fast is the agent improving?)
 
-Dash solves this with **6 layers of grounded context**, a **self-learning loop** that improves with every query, and a focus on **understanding your question** to deliver insights you can act on.
+---
 
-## The Six Layers of Context
+## 📚 The "6 Layers of Context"
 
-| Layer | Purpose | Source |
-|------|--------|--------|
-| **Table Usage** | Schema, columns, relationships | `knowledge/tables/*.json` |
-| **Human Annotations** | Metrics, definitions, and business rules | `knowledge/business/*.json` |
-| **Query Patterns** | SQL that is known to work | `knowledge/queries/*.sql` |
-| **Institutional Knowledge** | Docs, wikis, external references | MCP (optional) |
-| **Learnings** | Error patterns and discovered fixes | Agno `Learning Machine` |
-| **Runtime Context** | Live schema changes | `introspect_schema` tool |
+How does Recall know what you mean? It retrieves context at runtime:
 
-The agent retrieves relevant context at query time via hybrid search, then generates SQL grounded in patterns that already work.
+1.  **Table Metadata**: Schema definitions and column types.
+2.  **Human Annotations**: Descriptions of what data *actually means*.
+3.  **Query Patterns**: "Golden SQL" that is known to work.
+4.  **Learnings**: Past mistakes and their fixes.
+5.  **Runtime Context**: Current schema state.
+6.  **Institutional Knowledge**: Docs/Wikis (via MCP).
 
-## The Self-Learning Loop
+---
 
-Dash improves without retraining or fine-tuning. We call this gpu-poor continuous learning.
+## 🤝 Contributing
 
-It learns through two complementary systems:
+1.  Fork the repo.
+2.  Create a feature branch (`git checkout -b feature/amazing-feature`).
+3.  Commit your changes (`git commit -m 'Add amazing feature'`).
+4.  Push to the branch (`git push origin feature/amazing-feature`).
+5.  Open a Pull Request.
 
-| System | Stores | How It Evolves |
-|------|--------|----------------|
-| **Knowledge** | Validated queries and business context | Curated by you + dash |
-| **Learnings** | Error patterns and fixes | Managed by `Learning Machine` automatically |
+---
 
-```
-User Question
-     ↓
-Retrieve Knowledge + Learnings
-     ↓
-Reason about intent
-     ↓
-Generate grounded SQL
-     ↓
-Execute and interpret
-     ↓
- ┌────┴────┐
- ↓         ↓
-Success    Error
- ↓         ↓
- ↓         Diagnose → Fix → Save Learning
- ↓                           (never repeated)
- ↓
-Return insight
- ↓
-Optionally save as Knowledge
-```
-
-**Knowledge** is curated—validated queries and business context you want the agent to build on.
-
-**Learnings** is discovered—patterns the agent finds through trial and error. When a query fails because `position` is TEXT not INTEGER, the agent saves that gotcha. Next time, it knows.
-
-## Insights, Not Just Rows
-
-Dash reasons about what makes an answer useful, not just technically correct.
-
-**Question:**
-Who won the most races in 2019?
-
-| Typical SQL Agent | Dash |
-|------------------|------|
-| `Hamilton: 11` | Lewis Hamilton dominated 2019 with **11 wins out of 21 races**, more than double Bottas’s 4 wins. This performance secured his sixth world championship. |
-
-## Deploy to Railway
-
-```sh
-railway login
-
-./scripts/railway_up.sh
-```
-
-### Production Operations
-
-**Load data and knowledge:**
-```sh
-railway run python -m dash.scripts.load_data
-railway run python -m dash.scripts.load_knowledge
-```
-
-**View logs:**
-
-```sh
-railway logs --service dash
-```
-
-**Run commands in production:**
-
-```sh
-railway run python -m dash  # CLI mode
-```
-
-**Redeploy after changes:**
-
-```sh
-railway up --service dash -d
-```
-
-**Open dashboard:**
-```sh
-railway open
-```
-
-## Adding Knowledge
-
-Dash works best when it understands how your organization talks about data.
-
-```
-knowledge/
-├── tables/      # Table meaning and caveats
-├── queries/     # Proven SQL patterns
-└── business/    # Metrics and language
-```
-
-### Table Metadata
-
-```
-{
-  "table_name": "orders",
-  "table_description": "Customer orders with denormalized line items",
-  "use_cases": ["Revenue reporting", "Customer analytics"],
-  "data_quality_notes": [
-    "created_at is UTC",
-    "status values: pending, completed, refunded",
-    "amount stored in cents"
-  ]
-}
-```
-
-### Query Patterns
-
-```
--- <query name>monthly_revenue</query name>
--- <query description>
--- Monthly revenue calculation.
--- Converts cents to dollars.
--- Excludes refunded orders.
--- </query description>
--- <query>
-SELECT
-    DATE_TRUNC('month', created_at) AS month,
-    SUM(amount) / 100.0 AS revenue_dollars
-FROM orders
-WHERE status = 'completed'
-GROUP BY 1
-ORDER BY 1 DESC
--- </query>
-```
-
-### Business Rules
-
-```
-{
-  "metrics": [
-    {
-      "name": "MRR",
-      "definition": "Sum of active subscriptions excluding trials"
-    }
-  ],
-  "common_gotchas": [
-    {
-      "issue": "Revenue double counting",
-      "solution": "Filter to completed orders only"
-    }
-  ]
-}
-```
-
-### Load Knowledge
-
-```sh
-python -m dash.scripts.load_knowledge            # Upsert changes
-python -m dash.scripts.load_knowledge --recreate # Fresh start
-```
-
-## Local Development
-
-```sh
-./scripts/venv_setup.sh && source .venv/bin/activate
-docker compose up -d dash-db
-python -m dash.scripts.load_data
-python -m dash  # CLI mode
-```
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `OPENAI_API_KEY` | Yes | OpenAI API key |
-| `EXA_API_KEY` | No | Web search for external knowledge |
-| `DB_*` | No | Database config (defaults to localhost) |
-
-## Further Reading
-
-- [OpenAI's In-House Data Agent](https://openai.com/index/inside-our-in-house-data-agent/) — the inspiration
-- [Self-Improving SQL Agent](https://www.ashpreetbedi.com/articles/sql-agent) — deep dive on an earlier architecture
-- [Agno Docs](https://docs.agno.com)
-- [Discord](https://agno.com/discord)
+**Built with ❤️ for the Archestra Architecture Hackathon.**
