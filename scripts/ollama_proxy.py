@@ -21,13 +21,13 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         data = json.loads(body or b'{}')
 
-        # /mistral -> run mistral:latest (text generation)
+        # /mistral -> run phi:latest (text generation) - using phi as fallback for GPU issues
         if self.path == '/mistral':
             prompt = data.get('prompt', '')
             max_tokens = data.get('max_tokens', 2000)
             try:
                 payload = {
-                    "model": "mistral:latest",
+                    "model": "phi:latest",
                     "prompt": prompt,
                     "stream": False,
                     "options": {

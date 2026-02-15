@@ -3,6 +3,24 @@
 
 $BaseUrl = "http://localhost:8000"
 
+# Load local .env (if present) into environment for the demo (safe, not committed)
+if (Test-Path ".env") {
+    Get-Content .env | ForEach-Object {
+        $_ = $_.Trim()
+        if ($_.Length -eq 0 -or $_.StartsWith('#')) { return }
+        $pair = $_ -split '='
+        if ($pair.Length -ge 2) {
+            $name = $pair[0].Trim()
+            $value = ($pair[1..($pair.Length - 1)] -join '=').Trim()
+            $env:$name = $value
+        }
+    }
+}
+
+# MODEL_PROVIDER can be set in .env or overridden here:
+# $env:MODEL_PROVIDER = "gemini"
+
+
 Write-Host "================================" -ForegroundColor Cyan
 Write-Host "Recall MCP Server - API Tests" -ForegroundColor Cyan
 Write-Host "================================" -ForegroundColor Cyan
