@@ -55,83 +55,36 @@ Recall follows a **context-grounded agent architecture** where every SQL query i
 
 ```mermaid
 graph TB
-    subgraph "Frontend Layer"
-        User[User] -->|Natural Language Query| UI[React UI]
-        UI -->|Real-time Updates| ProcessMonitor[Process Monitor]
-    end
+    User[User Query] -->|Natural Language| UI[React Frontend]
+    UI -->|POST Request| API[FastAPI Server]
     
-    subgraph "API Layer"
-        UI -->|POST /ask_data_agent| API[FastAPI Server]
-        API -->|Health Checks| Health[/health/dependencies]
-        API -->|OpenTelemetry| Traces[OTEL Collector]
-    end
+    API -->|MCP Protocol| Agent[Recall Agent]
     
-    subgraph "Agent Orchestration Core"
-        API -->|MCP Protocol| Agent[Recall Agent]
-        
-        Agent -->|1. Parse| Parser[Query Parser]
-        Parser -->|Intent & Entities| Context[Context Aggregator]
-        
-        subgraph "6 Layers of Context"
-            Context -->|Layer 1| TableUsage[Table Usage Patterns]
-            Context -->|Layer 2| BusinessRules[Business Rules]
-            Context -->|Layer 3| QueryPatterns[Validated Queries]
-            Context -->|Layer 4| InstKnowledge[Institutional Knowledge]
-            Context -->|Layer 5| Learnings[Dynamic Learnings]
-            Context -->|Layer 6| Runtime[Runtime Schema]
-        end
-        
-        Context -->|Enriched Context| SQLGen[SQL Generator]
-        SQLGen -->|Validated SQL| Executor[Query Executor]
-        Executor -->|Results| Formatter[Insight Formatter]
-    end
+    Agent -->|Step 1| Parse[Parse Query]
+    Parse -->|Step 2| Knowledge[Search Knowledge Base]
+    Knowledge -->|Step 3| Learnings[Retrieve Learnings]
+    Learnings -->|Step 4| Schema[Introspect Schema]
+    Schema -->|Step 5| SQLGen[Generate SQL]
+    SQLGen -->|Step 6| Execute[Execute Query]
+    Execute -->|Step 7| Format[Format Insights]
     
-    subgraph "Data Layer"
-        Executor -->|Execute| DB[(PostgreSQL)]
-        
-        subgraph "Dual Knowledge System"
-            TableUsage -.->|Read| KnowledgeDB[Static Knowledge]
-            BusinessRules -.->|Read| KnowledgeDB
-            QueryPatterns -.->|Read| KnowledgeDB
-            
-            Learnings -.->|Read/Write| LearningsDB[Learning Machine]
-        end
-        
-        KnowledgeDB -->|pgvector| VectorSearch[Semantic Search]
-        LearningsDB -->|pgvector| VectorSearch
-        VectorSearch -->|768-dim embeddings| Ollama[nomic-embed-text]
-    end
+    Knowledge -->|Retrieve| VectorDB[(pgvector)]
+    Learnings -->|Retrieve| LearningDB[(Learning Machine)]
+    Execute -->|Query| PostgreSQL[(PostgreSQL)]
     
-    subgraph "LLM Infrastructure"
-        SQLGen -->|Prompt| LLM[Mistral via Ollama]
-        Formatter -->|Synthesize| LLM
-        InstKnowledge -->|Web Research| Exa[Exa MCP]
-        
-        subgraph "Ollama Proxy"
-            LLM -.->|HTTP API| Proxy[Host Proxy :5001]
-            Ollama -.->|Embed| Proxy
-        end
-    end
+    SQLGen -->|LLM Call| Mistral[Mistral via Ollama]
+    Format -->|LLM Call| Mistral
     
-    subgraph "Observability"
-        Traces -->|Metrics| Prometheus[Prometheus]
-        Prometheus -->|Visualize| Grafana[Grafana]
-    end
+    Format -->|Natural Language Answer| UI
+    UI -->|Display with Process Viz| User
     
-    Formatter -->|Natural Language Answer| ProcessMonitor
-    ProcessMonitor -->|7 Steps + Data| User
+    API -->|Traces| OTEL[OpenTelemetry]
+    OTEL -->|Metrics| Prometheus[Prometheus]
     
-    classDef frontend fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff;
-    classDef api fill:#8b5cf6,stroke:#6d28d9,stroke-width:2px,color:#fff;
-    classDef agent fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff;
-    classDef data fill:#f59e0b,stroke:#d97706,stroke-width:2px,color:#fff;
-    classDef llm fill:#ec4899,stroke:#db2777,stroke-width:2px,color:#fff;
-    
-    class User,UI,ProcessMonitor frontend;
-    class API,Health,Traces api;
-    class Agent,Parser,Context,SQLGen,Executor,Formatter agent;
-    class DB,KnowledgeDB,LearningsDB,VectorSearch data;
-    class LLM,Ollama,Proxy,Exa llm;
+    style Agent fill:#10b981,stroke:#059669,stroke-width:3px,color:#fff
+    style UI fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
+    style Mistral fill:#ec4899,stroke:#db2777,stroke-width:2px,color:#fff
+    style PostgreSQL fill:#f59e0b,stroke:#d97706,stroke-width:2px,color:#fff
 ```
 
 ---
