@@ -580,10 +580,12 @@ Contributions are welcome! Whether you're fixing bugs, adding new context layers
 
 ## Developers
 
-[Keerthivasan S V](https://github.com/Keerthivasan-Venkitajalam)
-[Kavinesh](https://github.com/Kavinesh11)
-[Sri Krishna Vundavalli](https://github.com/Sri-Krishna-V/)
-[Sai Nivedh](https://github.com/SaiNivedh26)
+| Dev                     | GitHub Profile                                                                 |
+|-------------------------|-------------------------------------------------------------------------------|
+| Keerthivasan S V        | [Keerthivasan-Venkitajalam](https://github.com/Keerthivasan-Venkitajalam)     |
+| Kavinesh                | [Kavinesh11](https://github.com/Kavinesh11)                                   |
+| Sri Krishna Vundavalli  | [Sri-Krishna-V](https://github.com/Sri-Krishna-V/)                            |
+| Sai Nivedh              | [SaiNivedh26](https://github.com/SaiNivedh26)                                 |
 
 **Recall** is a production-ready self-learning data agent built for the 2 Fast 2 MCP hackathon.
 
