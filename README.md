@@ -14,7 +14,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker)](https://docker.com)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Keerthivasan-Venkitajalam/Recall)
 
-[About](#about-the-project) • [Architecture](#system-architecture) • [6 Layers](#the-6-layers-of-context) • [Getting Started](#getting-started) • [Tech Stack](#tech-stack) • [Demo](#live-demo)
+[About](#about-the-project) • [Architecture](#system-architecture) • [6 Layers](#the-6-layers-of-context) • [Getting Started](#getting-started) • [Tech Stack](#tech-stack) • [Demo](#demo-video)
 
 </div>
 
@@ -141,7 +141,21 @@ graph TB
 
 ---
 
-## Live Demo
+## Demo Video
+
+<p align="center">
+  <a href="https://youtu.be/jKRUBMC5WhU">
+    <img
+      src="https://img.youtube.com/vi/riZ86vkI_60/maxresdefault.jpg"
+      alt="Watch the Recall demo video"
+      width="800"
+    />
+  </a>
+</p>
+
+<p align="center">
+  <em>Click the thumbnail above to watch the full project demo on YouTube.</em>
+</p>
 
 ### ChatGPT-Style Interface with Process Visualization
 
