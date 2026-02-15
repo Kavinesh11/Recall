@@ -12,6 +12,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109-009688?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com)
 [![MCP-Enabled](https://img.shields.io/badge/MCP-Enabled-purple?style=for-the-badge)](https://modelcontextprotocol.io)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker)](https://docker.com)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Keerthivasan-Venkitajalam/Recall)
 
 [About](#about-the-project) • [Architecture](#system-architecture) • [6 Layers](#the-6-layers-of-context) • [Getting Started](#getting-started) • [Tech Stack](#tech-stack) • [Demo](#live-demo)
 
