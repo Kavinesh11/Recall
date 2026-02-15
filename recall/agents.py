@@ -9,7 +9,8 @@ from os import getenv
 
 from agno.agent import Agent
 from agno.knowledge import Knowledge
-from agno.knowledge.embedder.openai import OpenAIEmbedder
+# embedder factory (supports openai or local `phi` via Ollama)
+from recall.tools.embedder import get_embedder
 from agno.learn import (
     LearnedKnowledgeConfig,
     LearningMachine,
@@ -47,7 +48,7 @@ recall_knowledge = Knowledge(
         db_url=db_url,
         table_name="recall_knowledge",
         search_type=SearchType.hybrid,
-        embedder=OpenAIEmbedder(id="text-embedding-3-small"),
+        embedder=get_embedder(),
     ),
     contents_db=get_postgres_db(contents_table="recall_knowledge_contents"),
 )
@@ -59,7 +60,7 @@ recall_learnings = Knowledge(
         db_url=db_url,
         table_name="recall_learnings",
         search_type=SearchType.hybrid,
-        embedder=OpenAIEmbedder(id="text-embedding-3-small"),
+        embedder=get_embedder(),
     ),
     contents_db=get_postgres_db(contents_table="recall_learnings_contents"),
 )

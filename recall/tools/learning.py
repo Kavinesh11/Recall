@@ -27,19 +27,7 @@ except ImportError:
         pass
 
 
-@lru_cache(maxsize=1)
-def get_embedder() -> Callable[[str], list[float]]:
-    """Get cached OpenAI embedder function."""
-    client = OpenAI()
-    
-    def embed(text: str) -> list[float]:
-        response = client.embeddings.create(
-            model="text-embedding-3-small",
-            input=text
-        )
-        return response.data[0].embedding
-    
-    return embed
+from recall.tools.embedder import get_embedder
 
 
 @lru_cache(maxsize=1)
@@ -223,7 +211,7 @@ def create_learning_count_tool():
             with store.engine.connect() as conn:
                 result = conn.execute(text("""
                     SELECT error_type, COUNT(*) as count
-                    FROM dash_learnings
+                    FROM recall_learnings
                     GROUP BY error_type
                     ORDER BY count DESC
                 """))

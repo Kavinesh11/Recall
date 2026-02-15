@@ -351,6 +351,41 @@ async def ask_data_agent(request: QueryRequest) -> QueryResponse:
     
     with track_query_latency():
         try:
+            # Demo shim: allow swapping model provider for local demos
+            from os import getenv
+            _provider = getenv("MODEL_PROVIDER", "openai").lower()
+
+            # Local Mistral via Ollama (host must have `ollama` and `mistral:latest`)
+            if _provider == "mistral":
+                from recall.tools.mistral_client import generate_text_from_mistral
+                try:
+                    mistral_text = generate_text_from_mistral(request.question)
+                    record_query_success()
+                    logger.info(f"[ask_data_agent][mistral] Success | run_id={request.run_id}")
+                    return QueryResponse(result=mistral_text, status="success")
+                except Exception as e:
+                    record_query_failure()
+                    record_query_error(type(e).__name__)
+                    error_msg = f"Mistral demo error: {str(e)}"
+                    logger.error(f"[ask_data_agent][mistral] {error_msg} | run_id={request.run_id}", exc_info=True)
+                    raise HTTPException(status_code=502, detail=error_msg)
+
+            # Gemini demo path (existing)
+            if _provider == "gemini":
+                from recall.tools.gemini_client import generate_text_from_gemini
+                try:
+                    gemini_text = generate_text_from_gemini(request.question)
+                    record_query_success()
+                    logger.info(f"[ask_data_agent][gemini] Success | run_id={request.run_id}")
+                    return QueryResponse(result=gemini_text, status="success")
+                except Exception as e:
+                    record_query_failure()
+                    record_query_error(type(e).__name__)
+                    error_msg = f"Gemini demo error: {str(e)}"
+                    logger.error(f"[ask_data_agent][gemini] {error_msg} | run_id={request.run_id}", exc_info=True)
+                    raise HTTPException(status_code=502, detail=error_msg)
+
+            # Default path: use the Recall agent (OpenAI or configured provider)
             with tracer.start_as_current_span("recall.reasoning") as span:
                 span.set_attribute("recall.question", request.question)
                 if request.run_id:
@@ -374,7 +409,6 @@ async def ask_data_agent(request: QueryRequest) -> QueryResponse:
                     
                     if total_tokens > 0:
                         from recall.observability import record_token_usage
-                        # Assuming model name is available or default to gpt-4
                         model_name = getattr(response, "model", "gpt-5.2")
                         record_token_usage(model_name, prompt_tokens, completion_tokens)
                         span.set_attribute("llm.active_tokens", total_tokens)

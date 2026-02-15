@@ -6,10 +6,10 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ============================================================================
--- Table: dash_learnings
+-- Table: recall_learnings
 -- Purpose: Store discovered error patterns and fixes as vector embeddings
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS dash_learnings (
+CREATE TABLE IF NOT EXISTS recall_learnings (
     id SERIAL PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
     error_pattern TEXT NOT NULL,
@@ -24,15 +24,15 @@ CREATE TABLE IF NOT EXISTS dash_learnings (
     metadata JSONB DEFAULT '{}'::jsonb
 );
 
-CREATE INDEX IF NOT EXISTS idx_dash_learnings_embedding 
-    ON dash_learnings USING hnsw (embedding vector_cosine_ops)
+CREATE INDEX IF NOT EXISTS idx_recall_learnings_embedding 
+    ON recall_learnings USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
-CREATE INDEX IF NOT EXISTS idx_dash_learnings_error_type 
-    ON dash_learnings(error_type);
+CREATE INDEX IF NOT EXISTS idx_recall_learnings_error_type 
+    ON recall_learnings(error_type);
 
-CREATE INDEX IF NOT EXISTS idx_dash_learnings_created_at 
-    ON dash_learnings(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_recall_learnings_created_at 
+    ON recall_learnings(created_at DESC);
 
 -- ============================================================================
 -- Table: schema_knowledge
@@ -97,9 +97,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS trigger_dash_learnings_timestamp ON dash_learnings;
-CREATE TRIGGER trigger_dash_learnings_timestamp
-    BEFORE UPDATE ON dash_learnings
+DROP TRIGGER IF EXISTS trigger_recall_learnings_timestamp ON recall_learnings;
+CREATE TRIGGER trigger_recall_learnings_timestamp
+    BEFORE UPDATE ON recall_learnings
     FOR EACH ROW EXECUTE FUNCTION update_timestamp();
 
 DROP TRIGGER IF EXISTS trigger_schema_knowledge_timestamp ON schema_knowledge;
@@ -126,7 +126,7 @@ DECLARE
     v_exists BOOLEAN;
 BEGIN
     SELECT EXISTS(
-        SELECT 1 FROM dash_learnings
+        SELECT 1 FROM recall_learnings
         WHERE 1 - (embedding <=> p_embedding) > p_similarity_threshold
     ) INTO v_exists;
     RETURN v_exists;
@@ -157,7 +157,7 @@ BEGIN
         dl.error_pattern,
         dl.fix_description,
         (1 - (dl.embedding <=> p_embedding))::FLOAT as similarity
-    FROM dash_learnings dl
+    FROM recall_learnings dl
     WHERE 1 - (dl.embedding <=> p_embedding) > p_min_similarity
     ORDER BY dl.embedding <=> p_embedding
     LIMIT p_limit;

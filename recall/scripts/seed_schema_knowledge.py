@@ -23,18 +23,10 @@ logger = logging.getLogger(__name__)
 KNOWLEDGE_DIR = Path(__file__).parent.parent / "knowledge"
 
 
-def get_embedder():
-    """Create an OpenAI embedding function."""
-    client = OpenAI()
-    
-    def embed(text: str) -> list[float]:
-        response = client.embeddings.create(
-            model="text-embedding-3-small",
-            input=text
-        )
-        return response.data[0].embedding
-    
-    return embed
+from recall.tools.embedder import get_embedder
+
+
+# get_embedder() now provided by recall.tools.embedder — supports `openai` or `phi` (ollama)
 
 
 def load_table_schemas() -> list[dict]:

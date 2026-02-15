@@ -40,6 +40,9 @@ services:
       PRINT_ENV_ON_LOAD: "True"
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       EXA_API_KEY: ${EXA_API_KEY:-}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-openai}
+      EMBEDDER_PROVIDER: ${EMBEDDER_PROVIDER:-openai}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     depends_on:
       - recall-db
     networks:
