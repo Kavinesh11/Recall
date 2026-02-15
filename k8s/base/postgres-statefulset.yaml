@@ -1,22 +1,22 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: dash-db
-  namespace: dash-system
+  name: recall-db
+  namespace: recall-system
   labels:
-    app.kubernetes.io/name: dash
+    app.kubernetes.io/name: recall
     app.kubernetes.io/component: database
 spec:
-  serviceName: dash-db-service
+  serviceName: recall-db-service
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: dash
+      app.kubernetes.io/name: recall
       app.kubernetes.io/component: database
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: dash
+        app.kubernetes.io/name: recall
         app.kubernetes.io/component: database
     spec:
       securityContext:
@@ -31,7 +31,7 @@ spec:
               protocol: TCP
           envFrom:
             - secretRef:
-                name: dash-db-secrets
+                name: recall-db-secrets
           env:
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
@@ -52,9 +52,9 @@ spec:
               command:
                 - pg_isready
                 - -U
-                - dash_user
+                - recall_user
                 - -d
-                - dash
+                - recall
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
@@ -64,9 +64,9 @@ spec:
               command:
                 - pg_isready
                 - -U
-                - dash_user
+                - recall_user
                 - -d
-                - dash
+                - recall
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
@@ -74,7 +74,7 @@ spec:
       volumes:
         - name: init-scripts
           configMap:
-            name: dash-db-init
+            name: recall-db-init
   volumeClaimTemplates:
     - metadata:
         name: postgres-data
@@ -88,15 +88,15 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: dash-db-service
-  namespace: dash-system
+  name: recall-db-service
+  namespace: recall-system
   labels:
-    app.kubernetes.io/name: dash
+    app.kubernetes.io/name: recall
     app.kubernetes.io/component: database
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: dash
+    app.kubernetes.io/name: recall
     app.kubernetes.io/component: database
   ports:
     - name: postgres

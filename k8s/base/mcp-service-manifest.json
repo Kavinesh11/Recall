@@ -2,23 +2,23 @@
   "apiVersion": "archestra.io/v1",
   "kind": "MCPService",
   "metadata": {
-    "name": "dash-sql-agent",
-    "namespace": "dash-system",
+    "name": "recall-sql-agent",
+    "namespace": "recall-system",
     "labels": {
-      "app.kubernetes.io/name": "dash",
+      "app.kubernetes.io/name": "recall",
       "app.kubernetes.io/component": "mcp-service",
       "archestra.io/category": "data-agent"
     }
   },
   "spec": {
-    "displayName": "Dash SQL Agent",
-    "description": "Self-learning SQL agent that provides insights from your database. Learns from errors and improves over time.",
+    "displayName": "Recall SQL Agent",
+    "description": "Self-learning SQL agent (Recall) that provides insights from your database. Learns from errors and improves over time.",
     "version": "1.0.0",
     "icon": "database",
     "category": "Data & Analytics",
     "transport": {
       "type": "streamable-http",
-      "endpoint": "http://dash-api-service.dash-system.svc.cluster.local:8000",
+ "endpoint": "http://recall-api-service.recall-system.svc.cluster.local:8000",
       "healthCheck": "/health"
     },
     "authentication": {
@@ -80,13 +80,13 @@
     "resources": [
       {
         "name": "schema",
-        "description": "Current database schema tracked by Dash",
+        "description": "Current database schema tracked by Recall",
         "endpoint": "/mcp/resources/schema",
         "method": "GET"
       },
       {
         "name": "learnings",
-        "description": "Error patterns and fixes discovered by Dash",
+        "description": "Error patterns and fixes discovered by Recall",
         "endpoint": "/mcp/resources/learnings",
         "method": "GET"
       }

@@ -1,10 +1,10 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: dash-api-ingress
-  namespace: dash-system
+  name: recall-api-ingress
+  namespace: recall-system
   labels:
-    app.kubernetes.io/name: dash
+    app.kubernetes.io/name: recall
     app.kubernetes.io/component: ingress
   annotations:
     kubernetes.io/ingress.class: nginx
@@ -20,49 +20,47 @@ metadata:
 spec:
   tls:
     - hosts:
-        - dash.archestra.local
-      secretName: dash-tls-secret
+        - recall.archestra.local
+      secretName: recall-tls-secret
   rules:
-    - host: dash.archestra.local
+    - host: recall.archestra.local
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: dash-api-service
+                name: recall-api-service
                 port:
                   number: 8000
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: dash-metrics-ingress
-  namespace: dash-system
+  name: recall-metrics-ingress
+  namespace: recall-system
   labels:
-    app.kubernetes.io/name: dash
+    app.kubernetes.io/name: recall
     app.kubernetes.io/component: metrics-ingress
   annotations:
     kubernetes.io/ingress.class: nginx
     nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 spec:
   rules:
-    - host: dash.archestra.local
+    - host: recall.archestra.local
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: dash-api-service
+                name: recall-api-service
                 port:
                   number: 8000
-      http:
-        paths:
           - path: /metrics
             pathType: Exact
             backend:
               service:
-                name: dash-api-service
+                name: recall-api-service
                 port:
                   number: 8000

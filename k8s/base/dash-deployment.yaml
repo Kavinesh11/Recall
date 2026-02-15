@@ -1,37 +1,37 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: dash-api
-  namespace: dash-system
+  name: recall-api
+  namespace: recall-system
   labels:
-    app.kubernetes.io/name: dash
+    app.kubernetes.io/name: recall
     app.kubernetes.io/component: api
     app.kubernetes.io/part-of: archestra
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app.kubernetes.io/name: dash
+      app.kubernetes.io/name: recall
       app.kubernetes.io/component: api
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: dash
+        app.kubernetes.io/name: recall
         app.kubernetes.io/component: api
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8000"
         prometheus.io/path: "/metrics"
     spec:
-      serviceAccountName: dash-api
+      serviceAccountName: recall-api
       securityContext:
         runAsNonRoot: true
         runAsUser: 61000
         runAsGroup: 61000
         fsGroup: 61000
       containers:
-        - name: dash-api
-          image: dash:latest
+        - name: recall-api
+          image: recall:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -39,12 +39,12 @@ spec:
               protocol: TCP
           envFrom:
             - configMapRef:
-                name: dash-config
+                name: recall-config
             - secretRef:
-                name: dash-secrets
+                name: recall-secrets
           env:
             - name: DB_URL
-              value: "postgresql://dash_user:pass@dash-db-service:5432/dash"
+              value: "postgresql://recall_user:pass@recall-db-service:5432/recall"
             - name: ENABLE_AUTH
               value: "true"
             - name: ARCHESTRA_TOKEN_ENDPOINT
@@ -93,8 +93,8 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: dash-api
-  namespace: dash-system
+  name: recall-api
+  namespace: recall-system
   labels:
-    app.kubernetes.io/name: dash
+    app.kubernetes.io/name: recall
     app.kubernetes.io/component: api

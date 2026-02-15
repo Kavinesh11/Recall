@@ -95,6 +95,8 @@ demo_script.md
 demo_*.log
 demo_*.mp4
 *.mp4
+scripts/demo_*.ps1
+scripts/run_demo_*.ps1
 
 # Optional: local PyPI creds (uncomment if you ever create it)
 # .pypirc
