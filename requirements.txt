@@ -106,3 +106,10 @@ opentelemetry-util-http==0.60b1
 protobuf==5.29.2
 googleapis-common-protos==1.66.0
 backoff==2.2.1
+ollama==0.4.9
+google-genai==1.63.0
+google-auth==2.36.0
+google-api-core==2.24.0
+cachetools==5.5.0
+tenacity==9.0.0
+groq==0.14.0

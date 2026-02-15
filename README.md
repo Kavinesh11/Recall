@@ -72,8 +72,8 @@ graph TB
     Learnings -->|Retrieve| LearningDB[(Learning Machine)]
     Execute -->|Query| PostgreSQL[(PostgreSQL)]
     
-    SQLGen -->|LLM Call| Mistral[Mistral via Ollama]
-    Format -->|LLM Call| Mistral
+    SQLGen -->|LLM Call| Gemini[Google Gemini]
+    Format -->|LLM Call| Gemini
     
     Format -->|Natural Language Answer| UI
     UI -->|Display with Process Viz| User
@@ -83,7 +83,7 @@ graph TB
     
     style Agent fill:#10b981,stroke:#059669,stroke-width:3px,color:#fff
     style UI fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
-    style Mistral fill:#ec4899,stroke:#db2777,stroke-width:2px,color:#fff
+    style Gemini fill:#4285f4,stroke:#1a73e8,stroke-width:2px,color:#fff
     style PostgreSQL fill:#f59e0b,stroke:#d97706,stroke-width:2px,color:#fff
 ```
 
@@ -180,8 +180,8 @@ The frontend provides real-time visibility into every step of the agent's reason
 ### Core Intelligence
 - **Agent Framework**: Agno MCP Framework
 - **Integration Protocol**: Model Context Protocol (MCP)
-- **LLM**: Mistral:latest via Ollama (self-hosted)
-- **Embeddings**: nomic-embed-text (768-dimensional)
+- **LLM**: Google Gemini (gemini-3-flash-preview)
+- **Embeddings**: nomic-embed-text via Ollama (768-dimensional)
 
 ### Backend & API
 - **Framework**: FastAPI with async/await
@@ -193,7 +193,7 @@ The frontend provides real-time visibility into every step of the agent's reason
 - **Vector Search**: pgvector with semantic similarity
 - **Static Knowledge**: JSON files (tables, queries, business rules)
 - **Dynamic Learnings**: Learning Machine with auto-indexing
-- **Embedding Provider**: Ollama HTTP API with host proxy fallback
+- **Embedding Provider**: nomic-embed-text via Ollama (embeddings only)
 
 ### Frontend
 - **Framework**: React 18 with Vite 4
@@ -205,7 +205,7 @@ The frontend provides real-time visibility into every step of the agent's reason
 - **Deployment**: Docker Compose + Kubernetes
 - **Observability**: OpenTelemetry + Prometheus + Grafana
 - **Health Checks**: `/health/dependencies` with status monitoring
-- **Proxy**: Custom Ollama proxy for Docker and host LLM communication
+- **LLM Integration**: Google Gemini API with Agno framework
 
 ---
 
@@ -214,9 +214,9 @@ The frontend provides real-time visibility into every step of the agent's reason
 ### Prerequisites
 
 - **Docker & Docker Compose** (for simplest setup)
-- **Ollama** installed on host machine with these models:
-  - `mistral:latest` (text generation)
-  - `nomic-embed-text:latest` (embeddings)
+- **Gemini API Key** from Google AI Studio
+- **Ollama** installed on host machine for embeddings:
+  - `nomic-embed-text:latest` (embeddings only)
 - **Node.js 18+** (for frontend development)
 - **Python 3.12+** (for backend development)
 
@@ -229,30 +229,26 @@ cd Recall
 
 # 2. Configure environment
 cp example.env .env
-# Edit .env if needed (defaults work for local development)
+# Add your GEMINI_API_KEY to .env
 
-# 3. Start Ollama models on host
-ollama pull mistral:latest
+# 3. Start Ollama and pull embedding model
 ollama pull nomic-embed-text:latest
 
-# 4. Start Ollama proxy (in separate terminal)
-python scripts/ollama_proxy.py
-
-# 5. Start backend services (PostgreSQL + API)
+# 4. Start backend services (PostgreSQL + API)
 docker compose up -d --build
 
-# 6. Load sample data (F1 racing dataset)
+# 5. Load sample data (F1 racing dataset)
 docker exec recall-api python -m recall.scripts.load_data
 
-# 7. Load knowledge base
+# 6. Load knowledge base
 docker exec recall-api python -m recall.scripts.load_knowledge
 
-# 8. Start frontend (in separate terminal)
+# 7. Start frontend (in separate terminal)
 cd web
 npm install
 npm run dev
 
-# 9. Open browser
+# 8. Open browser
 # http://localhost:5174/ (frontend)
 # http://localhost:8000/docs (API docs)
 ```
@@ -283,10 +279,10 @@ Recall is configured via **environment variables** in `.env`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MODEL_PROVIDER` | LLM provider (mistral, openai) | `mistral` |
-| `EMBEDDER_PROVIDER` | Embedding provider (nomic, openai) | `nomic` |
-| `OLLAMA_BASE_URL` | Ollama API endpoint | `http://host.docker.internal:11434` |
-| `OLLAMA_PROXY_URL` | Ollama proxy for Mistral | `http://host.docker.internal:5001` |
+| `GEMINI_API_KEY` | Google Gemini API key | (required) |
+| `MODEL_PROVIDER` | LLM provider (not used with Gemini) | - |
+| `EMBEDDER_PROVIDER` | Embedding provider (nomic via Ollama) | `nomic` |
+| `OLLAMA_BASE_URL` | Ollama API endpoint for embeddings | `http://host.docker.internal:11434` |
 | `DB_HOST` | PostgreSQL host | `recall-db` |
 | `DB_PORT` | PostgreSQL port | `5432` |
 | `DB_NAME` | Database name | `ai` |
@@ -297,11 +293,11 @@ Recall is configured via **environment variables** in `.env`:
 ### Docker Compose Configuration
 
 The `compose.yaml` includes:
-- **recall-api**: FastAPI backend with Agno MCP framework
+- **recall-api**: FastAPI backend with Agno MCP framework and Gemini
 - **recall-db**: PostgreSQL 18 with pgvector extension
 - **Health checks** on both services
 - **Persistent volumes** for database
-- **Host network access** via `extra_hosts` for Ollama communication
+- **Host network access** via `extra_hosts` for Ollama embeddings
 
 ---
 
@@ -365,8 +361,7 @@ recall/
 │   └── save_query.py         # Save validated queries
 ├── scripts/
 │   ├── load_data.py          # Load F1 sample data
-│   ├── load_knowledge.py     # Load knowledge files
-│   └── ollama_proxy.py       # Ollama HTTP proxy
+│   └── load_knowledge.py     # Load knowledge files
 ├── knowledge/                 # Static knowledge files
 │   ├── tables/               # Layer 1 schemas
 │   ├── queries/              # Layer 3 patterns
@@ -516,7 +511,7 @@ Every request generates a trace with spans:
 Available at `/metrics`:
 ```
 # Query metrics
-recall_queries_total{status="success",model="mistral"} 127
+recall_queries_total{status="success",model="gemini"} 127
 recall_query_duration_seconds_bucket{le="5.0"} 120
 recall_query_errors_total{error_type="sql_syntax"} 3
 
@@ -525,8 +520,8 @@ recall_knowledge_searches_total{layer="table_usage"} 127
 recall_knowledge_hits{layer="learnings"} 45
 
 # LLM metrics
-recall_llm_tokens_total{model="mistral",type="completion"} 52341
-recall_llm_latency_seconds{model="mistral"} 2.5
+recall_llm_tokens_total{model="gemini",type="completion"} 52341
+recall_llm_latency_seconds{model="gemini"} 2.5
 ```
 
 ### Grafana Dashboard
@@ -544,10 +539,10 @@ Import the pre-built dashboard for:
 
 | Issue | Solution |
 | :--- | :--- |
-| **"Ollama proxy unavailable"** | Start the proxy: `python scripts/ollama_proxy.py`. Ensure Ollama daemon is running on host. |
+| **"Gemini API error"** | Verify `GEMINI_API_KEY` in `.env` is valid. Check API quota at Google AI Studio. |
 | **"Knowledge base empty"** | Run `docker exec recall-api python -m recall.scripts.load_knowledge` to index documents. |
 | **"Frontend can't connect to API"** | Check `VITE_API_URL` in `web/.env`. Ensure backend is running on port 8000. |
-| **"502 Mistral error"** | Verify Mistral model is pulled: `ollama list`. Check proxy logs for HTTP API errors. |
+| **"Embedding model error"** | Ensure Ollama is running and `nomic-embed-text` is pulled: `ollama list`. |
 | **"Database connection failed"** | Check `DB_*` environment variables. Ensure recall-db container is healthy: `docker ps`. |
 | **"Process monitor not expanding"** | Click on completed steps (green checkmark). Only completed steps have data. |
 

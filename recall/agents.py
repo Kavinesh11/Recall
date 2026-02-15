@@ -18,7 +18,7 @@ from agno.learn import (
     UserMemoryConfig,
     UserProfileConfig,
 )
-from agno.models.openai import OpenAIResponses
+from agno.models.google import Gemini
 from agno.tools.mcp import MCPTools
 from agno.tools.reasoning import ReasoningTools
 from agno.tools.sql import SQLTools
@@ -208,7 +208,7 @@ save_learning(
 
 recall = Agent(
     name="Recall",
-    model=OpenAIResponses(id="gpt-5.2"),
+    model=Gemini(id="gemini-3-flash-preview"),
     db=agent_db,
     instructions=INSTRUCTIONS,
     # Knowledge (static)

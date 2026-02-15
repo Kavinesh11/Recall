@@ -244,6 +244,11 @@ curl -X POST http://localhost:8000/mcp/tools/save_verified_query \
 6. **Initialize data (one-time)**
    ```bash
    kubectl exec -n recall deployment/recall-api -- python -m recall.scripts.load_data
+   # If you want to use local Ollama `nomic-embed-text` for embeddings, set EMBEDDER_PROVIDER=nomic
+   kubectl exec -n recall deployment/recall-api -- env EMBEDDER_PROVIDER=nomic python -m recall.scripts.load_knowledge
+   # Or use local Ollama `phi` for text-only models (not embeddings):
+   kubectl exec -n recall deployment/recall-api -- env EMBEDDER_PROVIDER=phi python -m recall.scripts.load_knowledge
+   # Otherwise (default) the OpenAI embedder will be used
    kubectl exec -n recall deployment/recall-api -- python -m recall.scripts.load_knowledge
    ```
 
@@ -294,6 +299,7 @@ curl -X POST http://localhost:8000/mcp/tools/save_verified_query \
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `OPENAI_API_KEY` | Yes | - | OpenAI API key for embeddings and LLM |
+| `EMBEDDER_PROVIDER` | No | `openai` | Embedding provider: `openai` or `phi` (use `phi` for local Ollama) |
 | `DB_HOST` | No | `localhost` | PostgreSQL host |
 | `DB_PORT` | No | `5432` | PostgreSQL port |
 | `DB_USER` | No | `ai` | Database user |
