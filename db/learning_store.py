@@ -119,7 +119,7 @@ class LearningStore:
             embedding = self._get_embedding(combined_text)
             
             with self.engine.connect() as conn:
-                conn.execute(text("SELECT pg_advisory_lock(42)"))
+                conn.execute(text("SELECT pg_advisory_lock(hashtext('recall_learning_write'))"))
                 
                 try:
                     if skip_if_duplicate:
@@ -166,7 +166,7 @@ class LearningStore:
                     return True, f"Learning saved: {title}"
                     
                 finally:
-                    conn.execute(text("SELECT pg_advisory_unlock(42)"))
+                    conn.execute(text("SELECT pg_advisory_unlock(hashtext('recall_learning_write'))"))
                     
         except IntegrityError as e:
             logger.error(f"Integrity error saving learning: {e}")

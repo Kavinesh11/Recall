@@ -43,10 +43,10 @@ def generate_text_from_gemini(prompt: str, timeout: int = 15) -> str:
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not set in environment")
 
-    model = os.getenv("GEMINI_MODEL", "gemini-1.5")
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     endpoint = os.getenv(
         "GEMINI_API_ENDPOINT",
-        f"https://generativelanguage.googleapis.com/v1beta2/models/{model}:generate",
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
     )
 
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
