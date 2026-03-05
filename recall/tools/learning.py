@@ -170,6 +170,14 @@ def create_retrieve_learnings_tool():
             if not learnings:
                 return "No relevant learnings found."
             
+            # Increment usage count for each retrieved learning to track effectiveness
+            for learning in learnings:
+                if learning.id is not None:
+                    try:
+                        store.increment_usage(learning.id, success=True)
+                    except Exception as usage_err:
+                        logger.debug(f"[retrieve_learnings] Could not increment usage for {learning.id}: {usage_err}")
+            
             results = []
             for i, learning in enumerate(learnings, 1):
                 similarity_str = (

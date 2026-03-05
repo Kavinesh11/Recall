@@ -33,9 +33,17 @@ from recall.observability.metrics import (
 logger = logging.getLogger(__name__)
 
 def init_telemetry(service_name: str = "recall-agent"):
-    """Initialize OpenTelemetry tracing with OTLP or Console exporters."""
-    otel_endpoint = os.getenv("ARCHESTRA_OTEL_ENDPOINT")
+    """Initialize OpenTelemetry tracing with OTLP or Console exporters.
     
+    Reads OTEL_EXPORTER_OTLP_ENDPOINT (standard) with ARCHESTRA_OTEL_ENDPOINT
+    as a backward-compatible fallback.
+    """
+    # Standard OTEL env var first; fall back to legacy Archestra-specific name
+    otel_endpoint = (
+        os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+        or os.getenv("ARCHESTRA_OTEL_ENDPOINT")
+    )
+
     resource = Resource.create(attributes={
         ResourceAttributes.SERVICE_NAME: service_name,
     })
@@ -53,7 +61,7 @@ def init_telemetry(service_name: str = "recall-agent"):
             logger.error(f"Failed to initialize OTLP exporter: {e}. Falling back to ConsoleSpanExporter.", exc_info=True)
             tracer_provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
     else:
-        logger.info("ARCHESTRA_OTEL_ENDPOINT not set, using ConsoleSpanExporter for local development")
+        logger.info("No OTEL endpoint configured, using ConsoleSpanExporter for local development")
         tracer_provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
 
 __all__ = [

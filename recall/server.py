@@ -17,7 +17,7 @@ from typing import Any, Optional
 from opentelemetry import trace
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from fastapi import FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -105,6 +105,8 @@ app.add_middleware(
 
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=5000, description="Natural language question")
+    session_id: Optional[str] = Field(default=None, max_length=100, description="Session ID for conversation continuity")
+    user_id: Optional[str] = Field(default=None, max_length=100, description="User ID for per-user memory and history")
     use_learning: bool = Field(default=True, description="Enable learning retrieval")
     run_id: Optional[str] = Field(default=None, max_length=100, description="Correlation ID for tracing")
     
@@ -118,6 +120,13 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     result: str
     status: str = "success"
+    # Structured insight fields (populated when agent returns InsightResponse)
+    sql_used: Optional[str] = None
+    tables_used: list[str] = []
+    rows_returned: int = 0
+    confidence: float = 0.0
+    knowledge_hits: int = 0
+    learning_hits: int = 0
 
 class SaveQueryRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Query identifier")
@@ -386,36 +395,80 @@ async def ask_data_agent(request: QueryRequest) -> QueryResponse:
                     raise HTTPException(status_code=502, detail=error_msg)
 
             # Default path: use the Recall agent (OpenAI or configured provider)
+            # Initialise structured fields; overridden below when InsightResponse is returned
+            _sql_used: Optional[str] = None
+            _tables_used: list = []
+            _rows_returned: int = 0
+            _confidence: float = 0.0
+            _knowledge_hits: int = 0
+            _learning_hits: int = 0
+
             with tracer.start_as_current_span("recall.reasoning") as span:
                 span.set_attribute("recall.question", request.question)
                 if request.run_id:
                     span.set_attribute("recall.run_id", request.run_id)
                 
-                response = await recall.arun(request.question)
+                response = await recall.arun(
+                    request.question,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                )
                 
-                # Extract content
-                if hasattr(response, 'content'):
-                    result = response.content
-                elif isinstance(response, str):
-                    result = response
+                # Extract content — response.content is InsightResponse when output_schema is set
+                from recall.models import InsightResponse as _InsightResponse
+                raw_content = getattr(response, 'content', response)
+                if isinstance(raw_content, _InsightResponse):
+                    insight = raw_content
+                    result = insight.answer
+                    _sql_used = insight.sql_used
+                    _tables_used = insight.tables_used
+                    _rows_returned = insight.rows_returned
+                    _confidence = insight.confidence
+                    _knowledge_hits = insight.knowledge_hits
+                    _learning_hits = insight.learning_hits
+                elif isinstance(raw_content, str):
+                    result = raw_content
+                    _sql_used = None
+                    _tables_used = []
+                    _rows_returned = 0
+                    _confidence = 0.0
+                    _knowledge_hits = 0
+                    _learning_hits = 0
                 else:
-                    result = str(response)
+                    result = str(raw_content)
+                    _sql_used = None
+                    _tables_used = []
+                    _rows_returned = 0
+                    _confidence = 0.0
+                    _knowledge_hits = 0
+                    _learning_hits = 0
                 
-                # Try to record token usage if available
-                if hasattr(response, 'metrics') and isinstance(response.metrics, dict):
-                    prompt_tokens = response.metrics.get("prompt_tokens", 0)
-                    completion_tokens = response.metrics.get("completion_tokens", 0)
-                    total_tokens = response.metrics.get("total_tokens", 0)
-                    
-                    if total_tokens > 0:
-                        from recall.observability import record_token_usage
-                        model_name = getattr(response, "model", "gpt-5.2")
-                        record_token_usage(model_name, prompt_tokens, completion_tokens)
-                        span.set_attribute("llm.active_tokens", total_tokens)
+                # Record token usage — RunOutput.metrics is a Metrics object, not a dict
+                if hasattr(response, 'metrics') and response.metrics is not None:
+                    try:
+                        prompt_tokens = getattr(response.metrics, 'prompt_tokens', None) or 0
+                        completion_tokens = getattr(response.metrics, 'completion_tokens', None) or 0
+                        total_tokens = prompt_tokens + completion_tokens
+                        if total_tokens > 0:
+                            from recall.observability import record_token_usage
+                            model_name = getattr(response, "model", "gemini")
+                            record_token_usage(model_name, prompt_tokens, completion_tokens)
+                            span.set_attribute("llm.active_tokens", total_tokens)
+                    except Exception as metrics_err:
+                        logger.debug(f"Could not record token metrics: {metrics_err}")
 
             record_query_success()
             logger.info(f"[ask_data_agent] Success | run_id={request.run_id}")
-            return QueryResponse(result=result, status="success")
+            return QueryResponse(
+                result=result,
+                status="success",
+                sql_used=_sql_used,
+                tables_used=_tables_used,
+                rows_returned=_rows_returned,
+                confidence=_confidence,
+                knowledge_hits=_knowledge_hits,
+                learning_hits=_learning_hits,
+            )
             
         except Exception as e:
             record_query_failure()
@@ -423,6 +476,51 @@ async def ask_data_agent(request: QueryRequest) -> QueryResponse:
             error_msg = f"Error processing question: {str(e)}"
             logger.error(f"[ask_data_agent] {error_msg} | run_id={request.run_id}", exc_info=True)
             raise HTTPException(status_code=500, detail=error_msg)
+
+
+@app.post("/mcp/tools/ask_data_agent/stream")
+async def ask_data_agent_stream(request: QueryRequest) -> StreamingResponse:
+    """
+    Streams the agent's reasoning pipeline as Server-Sent Events.
+
+    Each event is a JSON-serialized RunOutputEvent from Agno. The frontend
+    can map tool_call_completed events to pipeline steps using tool.tool_name:
+      - search_knowledge_base  → Step 2: Knowledge search
+      - retrieve_learnings      → Step 3: Learnings retrieval
+      - introspect_schema       → Step 4: Schema introspection
+      - run_query               → Step 5+6: SQL generation + execution
+      - run_content events      → Step 7: Answer being formatted
+      - run_completed           → Final InsightResponse in event.content
+    """
+    logger.info(f"[ask_data_agent_stream] Question: {request.question[:100]}... | session={request.session_id}")
+
+    async def event_generator():
+        try:
+            async for chunk in recall.arun(
+                request.question,
+                session_id=request.session_id,
+                user_id=request.user_id,
+                stream=True,
+                stream_intermediate_steps=True,
+                retries=2,
+            ):
+                try:
+                    yield f"data: {chunk.model_dump_json()}\n\n"
+                except Exception as serialize_err:
+                    logger.debug(f"[stream] Could not serialize chunk: {serialize_err}")
+        except Exception as e:
+            logger.error(f"[ask_data_agent_stream] Error: {e}", exc_info=True)
+            error_payload = json.dumps({"event": "error", "message": str(e)})
+            yield f"data: {error_payload}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/mcp/tools/save_verified_query")
@@ -703,6 +801,12 @@ async def list_tools():
                 "name": "ask_data_agent",
                 "description": "Answers natural language questions about your database using SQL",
                 "endpoint": "/mcp/tools/ask_data_agent",
+                "method": "POST"
+            },
+            {
+                "name": "ask_data_agent_stream",
+                "description": "Streams the agent reasoning pipeline as Server-Sent Events (text/event-stream)",
+                "endpoint": "/mcp/tools/ask_data_agent/stream",
                 "method": "POST"
             },
             {

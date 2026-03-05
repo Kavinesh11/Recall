@@ -1,20 +1,29 @@
 import React, { useEffect, useState, useRef } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
-function extractCodeBlocks(text) {
-  const blocks = []
-  const fenced = /```(?:sql)?\n([\s\S]*?)```/g
-  let m
-  while ((m = fenced.exec(text))) {
-    blocks.push(m[1].trim())
-  }
-  if (blocks.length === 0) {
-    const sqlMatch = text.match(/(^SELECT[\s\S]*?;?$)/im)
-    if (sqlMatch) blocks.push(sqlMatch[1].trim())
-  }
-  return blocks
+// Maps Agno tool names from SSE events to pipeline step IDs
+const TOOL_TO_STEP = {
+  search_knowledge_base: 2,
+  retrieve_learnings: 3,
+  introspect_schema: 4,
+  run_query: 5,
 }
+
+function getOrCreateSessionId() {
+  const key = 'recall_session_id'
+  let id = localStorage.getItem(key)
+  if (!id) {
+    id = typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2)
+    localStorage.setItem(key, id)
+  }
+  return id
+}
+
 
 function SendIcon() {
   return (
@@ -83,24 +92,24 @@ export default function App() {
   const [processSteps, setProcessSteps] = useState([])
   const [systemMetrics, setSystemMetrics] = useState({ status: 'idle', tokens: 0, duration: 0, knowledgeHits: 0 })
   const [expandedSteps, setExpandedSteps] = useState(new Set())
+  const sessionId = useRef(getOrCreateSessionId())
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
 
   const toggleStep = (stepId) => {
     setExpandedSteps(prev => {
       const next = new Set(prev)
-      if (next.has(stepId)) {
-        next.delete(stepId)
-      } else {
-        next.add(stepId)
-      }
+      if (next.has(stepId)) next.delete(stepId)
+      else next.add(stepId)
       return next
     })
   }
 
   useEffect(() => {
     const saved = localStorage.getItem('recall_chat_history')
-    if (saved) setMessages(JSON.parse(saved))
+    if (saved) {
+      try { setMessages(JSON.parse(saved)) } catch {}
+    }
   }, [])
 
   useEffect(() => {
@@ -114,6 +123,117 @@ export default function App() {
     localStorage.removeItem('recall_chat_history')
   }
 
+  const INITIAL_STEPS = () => [
+    { id: 1, name: 'Parsing question',       status: 'running', timestamp: Date.now(), data: null },
+    { id: 2, name: 'Searching knowledge base',status: 'pending', timestamp: null, data: null },
+    { id: 3, name: 'Retrieving learnings',    status: 'pending', timestamp: null, data: null },
+    { id: 4, name: 'Introspecting schema',    status: 'pending', timestamp: null, data: null },
+    { id: 5, name: 'Generating SQL',          status: 'pending', timestamp: null, data: null },
+    { id: 6, name: 'Executing query',         status: 'pending', timestamp: null, data: null },
+    { id: 7, name: 'Formatting insights',     status: 'pending', timestamp: null, data: null },
+  ]
+
+  function markStep(stepId, status, data) {
+    setProcessSteps(prev => prev.map(s => {
+      if (s.id === stepId) return { ...s, status, timestamp: s.timestamp || Date.now(), data: data ?? s.data }
+      // Mark all previous pending steps as complete when a later step activates
+      if (s.id < stepId && s.status === 'pending') return { ...s, status: 'complete', timestamp: s.timestamp || Date.now() }
+      return s
+    }))
+  }
+
+  function handleSseChunk(chunk, startTime, assistantId) {
+    const eventName = chunk.event || ''
+
+    // Tool call started — mark step as running
+    if (eventName === 'ToolCallStarted' || eventName === 'tool_call_started') {
+      const toolName = chunk.tool?.tool_name || chunk.tool_name || ''
+      const stepId = TOOL_TO_STEP[toolName]
+      if (stepId) markStep(stepId, 'running', null)
+      // Step 1 (parsing) completes when first tool starts
+      markStep(1, 'complete', { parsed: true })
+    }
+
+    // Tool call completed — populate step data from real result
+    if (eventName === 'ToolCallCompleted' || eventName === 'tool_call_completed') {
+      const toolName = chunk.tool?.tool_name || chunk.tool_name || ''
+      const result = chunk.tool?.result ?? chunk.tool_result ?? null
+      const stepId = TOOL_TO_STEP[toolName]
+
+      if (toolName === 'search_knowledge_base') {
+        const hits = Array.isArray(result) ? result.length : 0
+        markStep(2, 'complete', { hits, docs: Array.isArray(result) ? result.slice(0, 5).map(d => d?.name || d?.id || 'doc') : [] })
+        setSystemMetrics(m => ({ ...m, knowledgeHits: hits }))
+      } else if (toolName === 'retrieve_learnings') {
+        const count = Array.isArray(result) ? result.length : (typeof result === 'string' ? (result.match(/Found (\d+)/) || [])[1] || 0 : 0)
+        markStep(3, 'complete', { patterns: Number(count), raw: typeof result === 'string' ? result.slice(0, 200) : null })
+      } else if (toolName === 'introspect_schema') {
+        const tables = typeof result === 'string' ? (result.match(/\*\*(\w+)\*\*/g) || []).map(t => t.replace(/\*\*/g, '')).slice(0, 6) : []
+        markStep(4, 'complete', { tables, raw: typeof result === 'string' ? result.slice(0, 300) : null })
+      } else if (toolName === 'run_query') {
+        // run_query result contains both the SQL and the query results
+        const sql = typeof result === 'object' && result?.query ? result.query : null
+        const rows = Array.isArray(result?.rows) ? result.rows : (Array.isArray(result) ? result : null)
+        const rowCount = rows ? rows.length : 0
+        markStep(5, 'complete', { sql, validated: true })
+        markStep(6, 'complete', { rows: rowCount, result: rows ? rows.slice(0, 5) : null })
+      } else if (stepId) {
+        markStep(stepId, 'complete', { raw: result })
+      }
+    }
+
+    // Streaming content — show answer as it arrives
+    if (eventName === 'RunContent' || eventName === 'run_content') {
+      markStep(7, 'running', null)
+      const chunk_text = chunk.content || ''
+      if (chunk_text) {
+        setMessages(m => m.map(x => x.id === assistantId
+          ? { ...x, text: x.text + chunk_text, raw: x.raw + chunk_text }
+          : x
+        ))
+      }
+    }
+
+    // Run completed — extract real metrics from InsightResponse
+    if (eventName === 'RunCompleted' || eventName === 'run_completed') {
+      const content = chunk.content
+      const metrics = chunk.metrics
+      const duration = Date.now() - startTime
+
+      // If content is the InsightResponse object, use its fields
+      if (content && typeof content === 'object' && content.answer) {
+        setMessages(m => m.map(x => x.id === assistantId
+          ? { ...x, text: content.answer, raw: content.answer }
+          : x
+        ))
+        markStep(7, 'complete', { insight: content.answer.slice(0, 150), confidence: content.confidence || 0.8 })
+        setProcessSteps(prev => prev.map(s => s.status !== 'complete' ? { ...s, status: 'complete', timestamp: s.timestamp || Date.now() } : s))
+        const totalTokens = metrics
+          ? ((metrics.prompt_tokens || 0) + (metrics.completion_tokens || 0))
+          : 0
+        setSystemMetrics(m => ({
+          ...m,
+          status: 'complete',
+          tokens: totalTokens || m.tokens,
+          duration,
+          knowledgeHits: content.knowledge_hits || m.knowledgeHits,
+        }))
+      } else {
+        // Plain text fallback
+        if (content && typeof content === 'string' && content.trim()) {
+          setMessages(m => m.map(x => x.id === assistantId
+            ? { ...x, text: content, raw: content }
+            : x
+          ))
+        }
+        markStep(7, 'complete', null)
+        setProcessSteps(prev => prev.map(s => s.status !== 'complete' ? { ...s, status: 'complete', timestamp: s.timestamp || Date.now() } : s))
+        const totalTokens = metrics ? ((metrics.prompt_tokens || 0) + (metrics.completion_tokens || 0)) : 0
+        setSystemMetrics(m => ({ ...m, status: 'complete', tokens: totalTokens || m.tokens, duration }))
+      }
+    }
+  }
+
   async function submitQuestion(e) {
     e?.preventDefault()
     const question = input.trim()
@@ -124,112 +244,81 @@ export default function App() {
     setInput('')
 
     const assistantId = Date.now() + '-a'
-    const assistantMsg = { id: assistantId, role: 'assistant', text: '', raw: '' }
-    setMessages(m => [...m, assistantMsg])
+    setMessages(m => [...m, { id: assistantId, role: 'assistant', text: '', raw: '' }])
     setIsStreaming(true)
-    
-    setProcessSteps([])
+    setProcessSteps(INITIAL_STEPS())
     setSystemMetrics({ status: 'processing', tokens: 0, duration: 0, knowledgeHits: 0 })
     const startTime = Date.now()
 
-    const steps = [
-      { id: 1, name: 'Parsing question', status: 'running', timestamp: Date.now(), data: null },
-      { id: 2, name: 'Searching knowledge base', status: 'pending', timestamp: null, data: null },
-      { id: 3, name: 'Retrieving learnings', status: 'pending', timestamp: null, data: null },
-      { id: 4, name: 'Introspecting schema', status: 'pending', timestamp: null, data: null },
-      { id: 5, name: 'Generating SQL', status: 'pending', timestamp: null, data: null },
-      { id: 6, name: 'Executing query', status: 'pending', timestamp: null, data: null },
-      { id: 7, name: 'Formatting insights', status: 'pending', timestamp: null, data: null }
-    ]
-    setProcessSteps(steps)
-
-    const stepDataGenerators = [
-      () => ({ parsed: question, intent: 'data_query', entities: ['race', 'winner', '2019'] }),
-      () => ({ 
-        hits: Math.floor(Math.random() * 5) + 3,
-        docs: ['race_wins.json', 'drivers_championship.json', 'metrics.json']
-      }),
-      () => ({ patterns: 2, relevance: 'high', examples: ['similar query patterns', 'error fixes'] }),
-      () => ({ 
-        tables: ['race_wins', 'drivers_championship'],
-        columns: ['driver_name', 'race_name', 'date', 'position']
-      }),
-      () => ({ 
-        sql: `SELECT driver_name, COUNT(*) as wins\\nFROM race_wins\\nWHERE EXTRACT(YEAR FROM TO_DATE(date, 'DD Mon YYYY')) = 2019\\nGROUP BY driver_name\\nORDER BY wins DESC\\nLIMIT 1`,
-        validated: true
-      }),
-      () => ({ rows: 1, duration_ms: 45, result: [{ driver_name: 'Lewis Hamilton', wins: 11 }] }),
-      () => ({ insight: 'Lewis Hamilton won the most races in 2019 with 11 victories', confidence: 0.95 })
-    ]
-
-    for (let i = 0; i < steps.length; i++) {
-      await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 400))
-      const stepData = stepDataGenerators[i]()
-      setProcessSteps(prev => prev.map((s, idx) => 
-        idx === i ? { ...s, status: 'running', timestamp: Date.now(), data: stepData } :
-        idx < i ? { ...s, status: 'complete', timestamp: s.timestamp || Date.now() } : s
-      ))
-      
-      if (i === 1) setSystemMetrics(m => ({ ...m, knowledgeHits: stepData.hits }))
-    }
-
     try {
-      const res = await fetch(`${API_BASE}/mcp/tools/ask_data_agent`, {
+      const res = await fetch(`${API_BASE}/mcp/tools/ask_data_agent/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, run_id: `web-${Date.now()}` })
+        body: JSON.stringify({
+          question,
+          session_id: sessionId.current,
+          run_id: `web-${Date.now()}`,
+        }),
       })
-      
+
       if (!res.ok) {
-        const errData = await res.json()
-        throw new Error(errData.detail || errData.error || 'Request failed')
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.detail || errData.error || `HTTP ${res.status}`)
       }
-      
-      const j = await res.json()
-      const full = (j.result || j["result"] || '').toString()
 
-      setProcessSteps(prev => prev.map(s => ({ ...s, status: 'complete', timestamp: s.timestamp || Date.now() })))
-      
-      const duration = Date.now() - startTime
-      setSystemMetrics(m => ({ 
-        status: 'complete', 
-        tokens: Math.floor(full.length / 4) + Math.floor(Math.random() * 200), 
-        duration,
-        knowledgeHits: m.knowledgeHits 
-      }))
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
 
-      await revealAssistantText(assistantId, full)
-      setIsStreaming(false)
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed.startsWith('data:')) continue
+          const jsonStr = trimmed.slice(5).trim()
+          if (!jsonStr) continue
+          try {
+            const chunk = JSON.parse(jsonStr)
+            handleSseChunk(chunk, startTime, assistantId)
+          } catch {}
+        }
+      }
+
+      // Ensure all steps are complete and status is updated
+      setProcessSteps(prev => prev.map(s => s.status !== 'complete' && s.status !== 'error'
+        ? { ...s, status: 'complete', timestamp: s.timestamp || Date.now() }
+        : s
+      ))
+      setSystemMetrics(m => m.status === 'processing' ? { ...m, status: 'complete', duration: Date.now() - startTime } : m)
     } catch (err) {
-      const errText = `Error: ${err.message || err}`
-      updateMessageText(assistantId, errText)
-      setProcessSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'error' } : s))
-      setSystemMetrics(m => ({ ...m, status: 'error' }))
+      // Fallback to regular endpoint if stream fails
+      try {
+        const res = await fetch(`${API_BASE}/mcp/tools/ask_data_agent`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question, session_id: sessionId.current, run_id: `web-${Date.now()}` }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const j = await res.json()
+        const text = j.result || ''
+        setMessages(m => m.map(x => x.id === assistantId ? { ...x, text, raw: text } : x))
+        setProcessSteps(prev => prev.map(s => ({ ...s, status: 'complete', timestamp: s.timestamp || Date.now() })))
+        setSystemMetrics({ status: 'complete', tokens: 0, duration: Date.now() - startTime, knowledgeHits: j.knowledge_hits || 0 })
+      } catch (fallbackErr) {
+        const errText = `Error: ${fallbackErr.message || fallbackErr}`
+        setMessages(m => m.map(x => x.id === assistantId ? { ...x, text: errText, raw: errText } : x))
+        setProcessSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'error' } : s))
+        setSystemMetrics(m => ({ ...m, status: 'error' }))
+      }
+    } finally {
       setIsStreaming(false)
     }
   }
 
-  function updateMessageText(id, text) {
-    setMessages(m => m.map(x => (x.id === id ? { ...x, text, raw: text } : x)))
-  }
-
-  function revealAssistantText(id, fullText) {
-    return new Promise(resolve => {
-      let i = 0
-      const speed = 15
-      const step = () => {
-        i += Math.max(1, Math.floor(fullText.length / 200))
-        if (i >= fullText.length) i = fullText.length
-        updateMessageText(id, fullText.slice(0, i))
-        if (i < fullText.length) {
-          setTimeout(step, speed)
-        } else {
-          resolve()
-        }
-      }
-      step()
-    })
-  }
 
   function copyToClipboard(text, id) {
     navigator.clipboard.writeText(text).then(() => {
@@ -370,32 +459,56 @@ export default function App() {
                         <div className={`${msg.role === 'user' ? 'bg-gradient-to-br from-blue-500/90 to-purple-600/90 px-5 py-3 rounded-2xl inline-block max-w-[80%] shadow-lg backdrop-blur-sm' : 'w-full'}`}>
                           <div>
                             {msg.text && (
-                              (() => {
-                                const blocks = extractCodeBlocks(msg.text)
-                                if (blocks.length > 0) {
-                                  const textOnly = msg.text.replace(/```(?:sql)?\n([\s\S]*?)```/g, '')
-                                  return (
-                                    <>
-                                      <div className="text-sm leading-7 text-white/90 font-medium whitespace-pre-wrap">{textOnly}</div>
-                                      {blocks.map((b, idx) => (
-                                        <div key={idx} className="mt-4 rounded-2xl overflow-hidden bg-black/60 border border-white/10 backdrop-blur-sm shadow-2xl">
-                                          <div className="flex items-center justify-between px-4 py-3 bg-white/5 border-b border-white/10">
-                                            <span className="text-xs font-bold text-white/60 uppercase tracking-wider">SQL Query</span>
-                                            <button 
-                                              onClick={() => copyToClipboard(b, msg.id + idx)} 
-                                              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 transition-all text-xs text-white/80 font-semibold"
-                                            >
-                                              {copiedId === msg.id + idx ? <><CheckIcon /> <span>Copied</span></> : <><CopyIcon /> <span>Copy</span></>}
-                                            </button>
-                                          </div>
-                                          <pre className="p-5 overflow-x-auto text-sm font-mono text-white/90 leading-relaxed">{b}</pre>
+                              msg.role === 'user'
+                                ? <div className="text-sm leading-7 text-white/90 whitespace-pre-wrap font-medium">{msg.text}</div>
+                                : (
+                                  <ReactMarkdown
+                                    remarkPlugins={[remarkGfm]}
+                                    components={{
+                                      code({ node, inline, className, children, ...props }) {
+                                        const codeStr = String(children).replace(/\n$/, '')
+                                        const isSql = !inline && (className === 'language-sql' || /^SELECT|INSERT|UPDATE|DELETE|WITH /i.test(codeStr))
+                                        if (!inline && (isSql || (!className && codeStr.includes('\n')))) {
+                                          return (
+                                            <div className="mt-4 rounded-2xl overflow-hidden bg-black/60 border border-white/10 backdrop-blur-sm shadow-2xl">
+                                              <div className="flex items-center justify-between px-4 py-3 bg-white/5 border-b border-white/10">
+                                                <span className="text-xs font-bold text-white/60 uppercase tracking-wider">{isSql ? 'SQL Query' : 'Code'}</span>
+                                                <button
+                                                  onClick={() => copyToClipboard(codeStr, msg.id + codeStr.slice(0, 20))}
+                                                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 transition-all text-xs text-white/80 font-semibold"
+                                                >
+                                                  {copiedId === msg.id + codeStr.slice(0, 20) ? <><CheckIcon /><span>Copied</span></> : <><CopyIcon /><span>Copy</span></>}
+                                                </button>
+                                              </div>
+                                              <pre className="p-5 overflow-x-auto text-sm font-mono text-white/90 leading-relaxed">{codeStr}</pre>
+                                            </div>
+                                          )
+                                        }
+                                        return <code className="bg-white/10 px-1.5 py-0.5 rounded text-sm font-mono text-white/90" {...props}>{children}</code>
+                                      },
+                                      p: ({ children }) => <p className="text-sm leading-7 text-white/90 font-medium mb-3">{children}</p>,
+                                      h1: ({ children }) => <h1 className="text-lg font-bold text-white mb-2 mt-4">{children}</h1>,
+                                      h2: ({ children }) => <h2 className="text-base font-bold text-white mb-2 mt-3">{children}</h2>,
+                                      h3: ({ children }) => <h3 className="text-sm font-bold text-white/90 mb-1 mt-3">{children}</h3>,
+                                      ul: ({ children }) => <ul className="list-disc list-inside text-sm text-white/80 space-y-1 mb-3 pl-2">{children}</ul>,
+                                      ol: ({ children }) => <ol className="list-decimal list-inside text-sm text-white/80 space-y-1 mb-3 pl-2">{children}</ol>,
+                                      li: ({ children }) => <li className="leading-6">{children}</li>,
+                                      strong: ({ children }) => <strong className="font-bold text-white">{children}</strong>,
+                                      em: ({ children }) => <em className="italic text-white/80">{children}</em>,
+                                      table: ({ children }) => (
+                                        <div className="overflow-x-auto my-3">
+                                          <table className="text-xs text-white/80 border-collapse w-full">{children}</table>
                                         </div>
-                                      ))}
-                                    </>
-                                  )
-                                }
-                                return <div className="text-sm leading-7 text-white/90 whitespace-pre-wrap font-medium">{msg.text}</div>
-                              })()
+                                      ),
+                                      thead: ({ children }) => <thead className="bg-white/10">{children}</thead>,
+                                      th: ({ children }) => <th className="border border-white/10 px-3 py-2 font-bold text-white text-left">{children}</th>,
+                                      td: ({ children }) => <td className="border border-white/10 px-3 py-2">{children}</td>,
+                                      blockquote: ({ children }) => <blockquote className="border-l-2 border-blue-400 pl-4 text-white/60 italic my-3">{children}</blockquote>,
+                                    }}
+                                  >
+                                    {msg.text}
+                                  </ReactMarkdown>
+                                )
                             )}
 
                             {isStreaming && msg.role === 'assistant' && msg.text === '' && (
@@ -545,52 +658,53 @@ export default function App() {
                     {step.data && expandedSteps.has(step.id) && (
                       <div className="px-3 pb-3 border-t border-white/5">
                         <div className="mt-2 bg-black/40 rounded-lg p-3 text-xs font-mono border border-white/5">
-                          {step.id === 1 && step.data.parsed && (
+                          {step.id === 1 && (
+                            <div className="text-green-400">✓ Question received</div>
+                          )}
+                          {step.id === 2 && step.data && (
                             <div className="space-y-1">
-                              <div><span className="text-blue-400">query:</span> <span className="text-gray-300">{step.data.parsed}</span></div>
-                              <div><span className="text-blue-400">intent:</span> <span className="text-green-400">{step.data.intent}</span></div>
-                              <div><span className="text-blue-400">entities:</span> <span className="text-yellow-400">[{step.data.entities.join(', ')}]</span></div>
+                              <div><span className="text-blue-400">hits:</span> <span className="text-green-400">{step.data.hits ?? 0}</span></div>
+                              {step.data.docs?.length > 0 && (
+                                <div><span className="text-blue-400">docs:</span> <span className="text-gray-300 break-all">{step.data.docs.join(', ')}</span></div>
+                              )}
                             </div>
                           )}
-                          {step.id === 2 && step.data.hits && (
+                          {step.id === 3 && step.data && (
                             <div className="space-y-1">
-                              <div><span className="text-blue-400">hits:</span> <span className="text-green-400">{step.data.hits}</span></div>
-                              <div><span className="text-blue-400">docs:</span> <span className="text-gray-300 break-all">{step.data.docs.join(', ')}</span></div>
+                              <div><span className="text-blue-400">patterns found:</span> <span className="text-green-400">{step.data.patterns ?? 0}</span></div>
+                              {step.data.raw && <div className="text-gray-400 text-[10px] mt-1 whitespace-pre-wrap">{step.data.raw}</div>}
                             </div>
                           )}
-                          {step.id === 3 && step.data.patterns && (
+                          {step.id === 4 && step.data && (
                             <div className="space-y-1">
-                              <div><span className="text-blue-400">patterns:</span> <span className="text-green-400">{step.data.patterns}</span></div>
-                              <div><span className="text-blue-400">relevance:</span> <span className="text-yellow-400">{step.data.relevance}</span></div>
-                              {step.data.examples && step.data.examples.map((ex, i) => (
-                                <div key={i} className="text-gray-400 pl-2">• {ex}</div>
-                              ))}
+                              {step.data.tables?.length > 0 && (
+                                <div><span className="text-blue-400">tables:</span> <span className="text-purple-400">[{step.data.tables.join(', ')}]</span></div>
+                              )}
+                              {step.data.raw && <div className="text-gray-400 text-[10px] mt-1 whitespace-pre-wrap overflow-x-auto">{step.data.raw.slice(0, 250)}</div>}
                             </div>
                           )}
-                          {step.id === 4 && step.data.tables && (
+                          {step.id === 5 && step.data && (
                             <div className="space-y-1">
-                              <div><span className="text-blue-400">tables:</span> <span className="text-purple-400">[{step.data.tables.join(', ')}]</span></div>
-                              <div><span className="text-blue-400">columns:</span> <span className="text-gray-300 break-all">{step.data.columns.slice(0, 4).join(', ')}...</span></div>
+                              {step.data.sql
+                                ? <div className="text-gray-300 whitespace-pre-wrap text-[10px] leading-relaxed overflow-x-auto">{step.data.sql}</div>
+                                : <div className="text-green-400">✓ SQL generated</div>
+                              }
                             </div>
                           )}
-                          {step.id === 5 && step.data.sql && (
+                          {step.id === 6 && step.data && (
                             <div className="space-y-1">
-                              <div><span className="text-blue-400">validated:</span> <span className="text-green-400">{step.data.validated ? '✓' : '✗'}</span></div>
-                              <div className="mt-2 text-gray-300 whitespace-pre-wrap text-[10px] leading-relaxed overflow-x-auto">{step.data.sql}</div>
+                              <div><span className="text-blue-400">rows:</span> <span className="text-green-400">{step.data.rows ?? 0}</span></div>
+                              {step.data.result && (
+                                <pre className="text-[10px] text-gray-300 overflow-x-auto mt-1">{JSON.stringify(step.data.result, null, 2)}</pre>
+                              )}
                             </div>
                           )}
-                          {step.id === 6 && step.data.rows !== undefined && (
+                          {step.id === 7 && step.data && (
                             <div className="space-y-1">
-                              <div><span className="text-blue-400">rows:</span> <span className="text-green-400">{step.data.rows}</span></div>
-                              <div><span className="text-blue-400">duration:</span> <span className="text-yellow-400">{step.data.duration_ms}ms</span></div>
-                              <div className="mt-2"><span className="text-blue-400">result:</span></div>
-                              <pre className="text-[10px] text-gray-300 overflow-x-auto">{JSON.stringify(step.data.result, null, 2)}</pre>
-                            </div>
-                          )}
-                          {step.id === 7 && step.data.insight && (
-                            <div className="space-y-1">
-                              <div className="text-gray-300">{step.data.insight}</div>
-                              <div className="mt-1"><span className="text-blue-400">confidence:</span> <span className="text-green-400">{(step.data.confidence * 100).toFixed(0)}%</span></div>
+                              {step.data.insight && <div className="text-gray-300">{step.data.insight}…</div>}
+                              {step.data.confidence != null && (
+                                <div className="mt-1"><span className="text-blue-400">confidence:</span> <span className="text-green-400">{(step.data.confidence * 100).toFixed(0)}%</span></div>
+                              )}
                             </div>
                           )}
                         </div>
