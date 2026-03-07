@@ -216,6 +216,8 @@ def run_evals(
     llm_grader: bool = False,
     compare_results: bool = False,
     output: str | None = None,
+    concurrency: int = 3,
+    timeout: float = 60.0,
 ):
     """Entry point: runs the async evaluation suite synchronously."""
     return asyncio.run(
@@ -225,6 +227,8 @@ def run_evals(
             llm_grader=llm_grader,
             compare_results=compare_results,
             output=output,
+            concurrency=concurrency,
+            timeout=timeout,
         )
     )
 
@@ -488,4 +492,6 @@ if __name__ == "__main__":
         llm_grader=args.llm_grader,
         compare_results=args.compare_results,
         output=args.output,
+        concurrency=args.concurrency,
+        timeout=args.timeout,
     )

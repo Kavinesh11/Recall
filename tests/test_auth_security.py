@@ -129,5 +129,46 @@ class TestAuthSecurity(unittest.TestCase):
          self.assertEqual(response.status_code, 200)
          self.assertEqual(response.json()["result"], "Success Result")
 
+    def test_stream_endpoint_auth_required(self):
+        """Streaming endpoint should require auth just like the non-streaming endpoint"""
+        response = client.post("/mcp/tools/ask_data_agent/stream", json={"question": "test"})
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("Missing Authorization header", str(response.json()))
+
+    def test_stream_endpoint_invalid_format(self):
+        """Streaming endpoint should reject invalid token format"""
+        response = client.post(
+            "/mcp/tools/ask_data_agent/stream",
+            json={"question": "test"},
+            headers={"Authorization": "Basic 1234"},
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("Invalid token format", str(response.json()))
+
+    def test_stream_endpoint_returns_event_stream(self):
+        """Streaming endpoint should return text/event-stream content type with valid token"""
+        import json as _json
+
+        class FakeChunk:
+            def model_dump_json(self):
+                return _json.dumps({"event": "RunCompleted", "content": "done"})
+
+        async def fake_arun(*args, **kwargs):
+            yield FakeChunk()
+
+        mock_recall.arun = fake_arun
+
+        with client.stream(
+            "POST",
+            "/mcp/tools/ask_data_agent/stream",
+            json={"question": "test"},
+            headers={"Authorization": "Bearer valid_token_12345"},
+        ) as response:
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("text/event-stream", response.headers.get("content-type", ""))
+            body = response.read().decode()
+            self.assertTrue(body.startswith("data:"), f"Expected SSE data line, got: {body[:80]}")
+
+
 if __name__ == "__main__":
     unittest.main()

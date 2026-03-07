@@ -145,6 +145,37 @@ export default function App() {
   function handleSseChunk(chunk, startTime, assistantId) {
     const eventName = chunk.event || ''
 
+    // Stream error — surface to user and mark steps/system as error
+    if (eventName === 'error') {
+      const errorMessage =
+        (chunk.error && (chunk.error.message || chunk.error.detail)) ||
+        chunk.message ||
+        'An unknown error occurred while processing the request.'
+
+      if (assistantId) {
+        setMessages(prev =>
+          prev.map(msg => {
+            if (msg.id !== assistantId) return msg
+            const errLine = `\n\n[Error from server]\n${errorMessage}`
+            // Avoid appending duplicate error lines
+            if (msg.text && msg.text.includes(errLine.trim())) return msg
+            return { ...msg, text: (msg.text || '') + errLine, raw: (msg.raw || '') + errLine }
+          })
+        )
+      }
+
+      setProcessSteps(prev =>
+        prev.map(step =>
+          step.status === 'running' || step.status === 'pending'
+            ? { ...step, status: 'error', timestamp: step.timestamp || Date.now() }
+            : step
+        )
+      )
+
+      setSystemMetrics(prev => ({ ...prev, status: 'error' }))
+      return
+    }
+
     // Tool call started — mark step as running
     if (eventName === 'ToolCallStarted' || eventName === 'tool_call_started') {
       const toolName = chunk.tool?.tool_name || chunk.tool_name || ''
@@ -206,7 +237,7 @@ export default function App() {
           ? { ...x, text: content.answer, raw: content.answer }
           : x
         ))
-        markStep(7, 'complete', { insight: content.answer.slice(0, 150), confidence: content.confidence || 0.8 })
+        markStep(7, 'complete', { insight: content.answer.slice(0, 150), confidence: content.confidence ?? 0.8 })
         setProcessSteps(prev => prev.map(s => s.status !== 'complete' ? { ...s, status: 'complete', timestamp: s.timestamp || Date.now() } : s))
         const totalTokens = metrics
           ? ((metrics.prompt_tokens || 0) + (metrics.completion_tokens || 0))
@@ -216,7 +247,7 @@ export default function App() {
           status: 'complete',
           tokens: totalTokens || m.tokens,
           duration,
-          knowledgeHits: content.knowledge_hits || m.knowledgeHits,
+          knowledgeHits: content.knowledge_hits ?? m.knowledgeHits,
         }))
       } else {
         // Plain text fallback
@@ -467,7 +498,7 @@ export default function App() {
                                     components={{
                                       code({ node, inline, className, children, ...props }) {
                                         const codeStr = String(children).replace(/\n$/, '')
-                                        const isSql = !inline && (className === 'language-sql' || /^SELECT|INSERT|UPDATE|DELETE|WITH /i.test(codeStr))
+                                        const isSql = !inline && (className === 'language-sql' || /^(SELECT|INSERT|UPDATE|DELETE|WITH)\b/i.test(codeStr))
                                         if (!inline && (isSql || (!className && codeStr.includes('\n')))) {
                                           return (
                                             <div className="mt-4 rounded-2xl overflow-hidden bg-black/60 border border-white/10 backdrop-blur-sm shadow-2xl">
@@ -504,6 +535,14 @@ export default function App() {
                                       th: ({ children }) => <th className="border border-white/10 px-3 py-2 font-bold text-white text-left">{children}</th>,
                                       td: ({ children }) => <td className="border border-white/10 px-3 py-2">{children}</td>,
                                       blockquote: ({ children }) => <blockquote className="border-l-2 border-blue-400 pl-4 text-white/60 italic my-3">{children}</blockquote>,
+                                      // Security: block remote images to prevent privacy leaks/unwanted requests
+                                      img: () => null,
+                                      // Security: only allow http/https links to prevent javascript: and data: URLs
+                                      a: ({ href, children, ...props }) => {
+                                        const safe = href && /^https?:\/\//i.test(href)
+                                        if (!safe) return <span role="link" aria-disabled="true" className="text-white/50 cursor-not-allowed">{children}</span>
+                                        return <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 underline hover:text-blue-300" {...props}>{children}</a>
+                                      },
                                     }}
                                   >
                                     {msg.text}
