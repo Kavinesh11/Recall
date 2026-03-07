@@ -122,7 +122,7 @@ class QueryResponse(BaseModel):
     status: str = "success"
     # Structured insight fields (populated when agent returns InsightResponse)
     sql_used: Optional[str] = None
-    tables_used: list[str] = []
+    tables_used: list[str] = Field(default_factory=list)
     rows_returned: int = 0
     confidence: float = 0.0
     knowledge_hits: int = 0
