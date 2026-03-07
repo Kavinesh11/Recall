@@ -175,8 +175,10 @@ def compare_results(
     # If key columns specified, only compare those
     if key_columns:
         key_cols = [k.lower().strip() for k in key_columns]
-        expected_normalized = [{k: v for k, v in r.items() if k in key_cols} for r in expected_normalized]
-        actual_normalized = [{k: v for k, v in r.items() if k in key_cols} for r in actual_normalized]
+        expected_normalized = [
+            {k: v for k, v in r.items() if k in key_cols} for r in expected_normalized]
+        actual_normalized = [{k: v for k, v in r.items() if k in key_cols}
+                             for r in actual_normalized]
 
     # Check if key values from expected appear in actual
     # This is a lenient comparison - actual can have more data
@@ -192,15 +194,18 @@ def compare_results(
                     return False, f"Mismatch in '{key}': expected '{expected_val}', got '{actual_val}'"
             else:
                 # Check if the value appears anywhere in actual
-                found = any(expected_val.lower() in str(v).lower() for r in actual_normalized for v in r.values())
+                found = any(expected_val.lower() in str(v).lower()
+                            for r in actual_normalized for v in r.values())
                 if not found:
                     return False, f"Expected value '{expected_val}' not found in actual results"
 
         return True, "Key values match"
 
     # For multi-row results, check if expected values appear in actual
-    expected_values = {str(v).lower() for r in expected_normalized for v in r.values()}
-    actual_values = {str(v).lower() for r in actual_normalized for v in r.values()}
+    expected_values = {str(v).lower()
+                       for r in expected_normalized for v in r.values()}
+    actual_values = {str(v).lower()
+                     for r in actual_normalized for v in r.values()}
 
     missing = expected_values - actual_values
     if missing:

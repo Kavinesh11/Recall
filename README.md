@@ -18,6 +18,8 @@
 
 </div>
 
+![Recall](recall.png)
+
 ---
 
 ## About the Project

@@ -7,9 +7,12 @@ Usage:
     python -m recall.evals.run_evals --verbose
     python -m recall.evals.run_evals --llm-grader
     python -m recall.evals.run_evals --compare-results
+    python -m recall.evals.run_evals --output results.json
 """
 
 import argparse
+import asyncio
+import json
 import time
 from typing import TypedDict
 
@@ -57,23 +60,84 @@ def check_strings_in_response(response: str, expected: list[str]) -> list[str]:
     return [v for v in expected if v.lower() not in response_lower]
 
 
-def run_evals(
+async def run_single_test(
+    test_case: TestCase,
+    semaphore: asyncio.Semaphore,
+    verbose: bool,
+    llm_grader: bool,
+    compare_results: bool,
+    timeout: float = 60.0,
+) -> EvalResult:
+    """Run a single test case with semaphore-controlled concurrency and per-test timeout."""
+    from recall.agents import recall
+
+    async with semaphore:
+        test_start = time.time()
+        try:
+            run_coro = recall.arun(test_case.question)
+            result = await asyncio.wait_for(run_coro, timeout=timeout)
+            # InsightResponse content: if it's an InsightResponse, extract answer
+            content = result.content if hasattr(result, 'content') else result
+            if hasattr(content, 'answer'):
+                response = content.answer
+            elif isinstance(content, str):
+                response = content
+            else:
+                response = str(content)
+            duration = time.time() - test_start
+
+            eval_result = evaluate_response(
+                test_case=test_case,
+                response=response,
+                llm_grader=llm_grader,
+                compare_results=compare_results,
+            )
+
+            return {
+                "status": eval_result["status"],
+                "question": test_case.question,
+                "category": test_case.category,
+                "missing": eval_result.get("missing"),
+                "duration": duration,
+                "response": response if verbose else None,
+                "llm_grade": eval_result.get("llm_grade"),
+                "llm_reasoning": eval_result.get("llm_reasoning"),
+                "result_match": eval_result.get("result_match"),
+                "result_explanation": eval_result.get("result_explanation"),
+            }
+
+        except asyncio.TimeoutError:
+            return {
+                "status": "ERROR",
+                "question": test_case.question,
+                "category": test_case.category,
+                "missing": None,
+                "duration": timeout,
+                "error": f"Timed out after {timeout:.0f}s",
+                "response": None,
+            }
+        except Exception as e:
+            return {
+                "status": "ERROR",
+                "question": test_case.question,
+                "category": test_case.category,
+                "missing": None,
+                "duration": time.time() - test_start,
+                "error": str(e),
+                "response": None,
+            }
+
+
+async def run_evals_async(
     category: str | None = None,
     verbose: bool = False,
     llm_grader: bool = False,
     compare_results: bool = False,
-):
-    """
-    Run evaluation suite.
-
-    Args:
-        category: Filter tests by category
-        verbose: Show full responses on failure
-        llm_grader: Use LLM to grade responses
-        compare_results: Compare actual results against golden SQL results
-    """
-    from recall.agents import recall
-
+    output: str | None = None,
+    concurrency: int = 3,
+    timeout: float = 60.0,
+) -> list[EvalResult]:
+    """Run evaluation suite in parallel using asyncio.gather()."""
     # Filter tests
     tests = TEST_CASES
     if category:
@@ -81,9 +145,8 @@ def run_evals(
 
     if not tests:
         console.print(f"[red]No tests found for category: {category}[/red]")
-        return
+        return []
 
-    # Show evaluation mode
     mode_info = []
     if llm_grader:
         mode_info.append("LLM grading")
@@ -94,12 +157,12 @@ def run_evals(
 
     console.print(
         Panel(
-            f"[bold]Running {len(tests)} tests[/bold]\nMode: {', '.join(mode_info)}",
+            f"[bold]Running {len(tests)} tests[/bold] (parallel ×{concurrency}, timeout {timeout:.0f}s)\nMode: {', '.join(mode_info)}",
             style="blue",
         )
     )
 
-    results: list[EvalResult] = []
+    semaphore = asyncio.Semaphore(concurrency)
     start = time.time()
 
     with Progress(
@@ -109,63 +172,65 @@ def run_evals(
         TaskProgressColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Evaluating...", total=len(tests))
+        task_bar = progress.add_task("Evaluating...", total=len(tests))
 
-        for test_case in tests:
-            progress.update(task, description=f"[cyan]{test_case.question[:40]}...[/cyan]")
-            test_start = time.time()
+        async def run_and_advance(tc: TestCase) -> EvalResult:
+            r = await run_single_test(tc, semaphore, verbose, llm_grader, compare_results, timeout)
+            progress.advance(task_bar)
+            return r
 
-            try:
-                result = recall.run(test_case.question)
-                response = result.content or ""
-                duration = time.time() - test_start
-
-                # Evaluate the response
-                eval_result = evaluate_response(
-                    test_case=test_case,
-                    response=response,
-                    llm_grader=llm_grader,
-                    compare_results=compare_results,
-                )
-
-                results.append(
-                    {
-                        "status": eval_result["status"],
-                        "question": test_case.question,
-                        "category": test_case.category,
-                        "missing": eval_result.get("missing"),
-                        "duration": duration,
-                        "response": response if verbose else None,
-                        "llm_grade": eval_result.get("llm_grade"),
-                        "llm_reasoning": eval_result.get("llm_reasoning"),
-                        "result_match": eval_result.get("result_match"),
-                        "result_explanation": eval_result.get("result_explanation"),
-                    }
-                )
-
-            except Exception as e:
-                duration = time.time() - test_start
-                results.append(
-                    {
-                        "status": "ERROR",
-                        "question": test_case.question,
-                        "category": test_case.category,
-                        "missing": None,
-                        "duration": duration,
-                        "error": str(e),
-                        "response": None,
-                    }
-                )
-
-            progress.advance(task)
+        results: list[EvalResult] = await asyncio.gather(
+            *[run_and_advance(tc) for tc in tests]
+        )
 
     total_duration = time.time() - start
 
-    # Results table
     display_results(results, verbose, llm_grader, compare_results)
-
-    # Summary
     display_summary(results, total_duration, category)
+
+    if output:
+        with open(output, "w") as f:
+            json.dump(
+                {
+                    "meta": {
+                        "timestamp": time.time(),
+                        "category": category,
+                        "total_duration_s": total_duration,
+                        "concurrency": concurrency,
+                        "timeout_s": timeout,
+                    },
+                    "results": list(results),
+                },
+                f,
+                indent=2,
+                default=str,
+            )
+        console.print(f"[green]Results written to {output}[/green]")
+
+    return results
+
+
+def run_evals(
+    category: str | None = None,
+    verbose: bool = False,
+    llm_grader: bool = False,
+    compare_results: bool = False,
+    output: str | None = None,
+    concurrency: int = 3,
+    timeout: float = 60.0,
+):
+    """Entry point: runs the async evaluation suite synchronously."""
+    return asyncio.run(
+        run_evals_async(
+            category=category,
+            verbose=verbose,
+            llm_grader=llm_grader,
+            compare_results=compare_results,
+            output=output,
+            concurrency=concurrency,
+            timeout=timeout,
+        )
+    )
 
 
 def evaluate_response(
@@ -208,7 +273,7 @@ def evaluate_response(
             result_pass = all(
                 any(exp.lower() in gv.lower() for gv in golden_values)
                 for exp in test_case.expected_strings
-                if exp.isalpha()  # Only check name strings, not numbers
+                if exp and isinstance(exp, str)  # Check all non-empty strings including numeric values
             )
             result["result_match"] = result_pass
             result["result_explanation"] = (
@@ -399,6 +464,26 @@ if __name__ == "__main__":
         action="store_true",
         help="Compare against golden SQL results where available",
     )
+    parser.add_argument(
+        "--output",
+        "-o",
+        metavar="FILE",
+        help="Write results as a structured JSON artifact to this file path",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=3,
+        metavar="N",
+        help="Number of tests to run in parallel (default: 3)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=60.0,
+        metavar="SECS",
+        help="Per-test timeout in seconds (default: 60)",
+    )
     args = parser.parse_args()
 
     run_evals(
@@ -406,4 +491,7 @@ if __name__ == "__main__":
         verbose=args.verbose,
         llm_grader=args.llm_grader,
         compare_results=args.compare_results,
+        output=args.output,
+        concurrency=args.concurrency,
+        timeout=args.timeout,
     )

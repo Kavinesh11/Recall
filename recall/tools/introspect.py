@@ -64,6 +64,33 @@ def create_introspect_schema_tool(db_url: str):
                 lines.append(f"**Primary Key:** {', '.join(pk['constrained_columns'])}")
                 lines.append("")
 
+            # Foreign keys
+            fks = insp.get_foreign_keys(table_name)
+            if fks:
+                lines.extend(["### Foreign Keys", ""])
+                for fk in fks:
+                    local_cols = ", ".join(fk.get("constrained_columns", []))
+                    ref_table = fk.get("referred_table", "?")
+                    ref_cols = ", ".join(fk.get("referred_columns", []))
+                    lines.append(f"- `{local_cols}` → `{ref_table}({ref_cols})`")
+                lines.append("")
+
+            # Indexes
+            try:
+                with engine.connect() as conn:
+                    idx_result = conn.execute(
+                        text("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = :t ORDER BY indexname"),
+                        {"t": table_name},
+                    )
+                    idx_rows = idx_result.fetchall()
+                    if idx_rows:
+                        lines.extend(["### Indexes", ""])
+                        for idx_name, idx_def in idx_rows:
+                            lines.append(f"- **{idx_name}**: `{idx_def}`")
+                        lines.append("")
+            except (OperationalError, DatabaseError):
+                pass
+
             # Sample data
             if include_sample_data:
                 lines.append("### Sample")

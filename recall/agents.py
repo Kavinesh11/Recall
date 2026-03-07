@@ -26,6 +26,7 @@ from agno.vectordb.pgvector import PgVector, SearchType
 
 from recall.context.business_rules import BUSINESS_CONTEXT
 from recall.context.semantic_model import SEMANTIC_MODEL_STR
+from recall.models import InsightResponse
 from recall.tools import (
     create_introspect_schema_tool,
     create_learning_count_tool,
@@ -200,6 +201,16 @@ save_learning(
 - You are FORBIDDEN from running DROP, DELETE, TRUNCATE, UPDATE, or INSERT queries.
 - If a user asks for these, REFUSE and explain that you are read-only.
 - ABSOLUTE LIMIT of 1000 rows per query. Never exceed this.
+
+## OUTPUT FORMAT
+Your final response MUST be a valid JSON object matching the InsightResponse schema:
+- `answer`: The full natural language insight (required). Be rich and contextual.
+- `sql_used`: The exact SQL you executed (or null if no SQL was needed).
+- `tables_used`: List of table names you queried.
+- `rows_returned`: How many rows the query returned.
+- `confidence`: Your confidence in the answer (0.0–1.0).
+- `knowledge_hits`: How many knowledge base documents you retrieved.
+- `learning_hits`: How many past learnings you retrieved.
 """
 
 # ============================================================================
@@ -211,6 +222,8 @@ recall = Agent(
     model=Gemini(id="gemini-3-flash-preview"),
     db=agent_db,
     instructions=INSTRUCTIONS,
+    # Structured output — final response is always typed InsightResponse
+    output_schema=InsightResponse,
     # Knowledge (static)
     knowledge=recall_knowledge,
     search_knowledge=True,

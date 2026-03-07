@@ -19,6 +19,15 @@ from sqlalchemy.pool import QueuePool
 
 logger = logging.getLogger(__name__)
 
+try:
+    from recall.observability.metrics import track_vector_search_latency
+except ImportError:
+    from contextlib import contextmanager
+
+    @contextmanager  # type: ignore[misc]
+    def track_vector_search_latency(search_type: str = "hybrid"):  # type: ignore[misc]
+        yield
+
 
 @dataclass
 class Learning:
@@ -119,7 +128,7 @@ class LearningStore:
             embedding = self._get_embedding(combined_text)
             
             with self.engine.connect() as conn:
-                conn.execute(text("SELECT pg_advisory_lock(42)"))
+                conn.execute(text("SELECT pg_advisory_lock(hashtext('recall_learning_write'))"))
                 
                 try:
                     if skip_if_duplicate:
@@ -166,7 +175,7 @@ class LearningStore:
                     return True, f"Learning saved: {title}"
                     
                 finally:
-                    conn.execute(text("SELECT pg_advisory_unlock(42)"))
+                    conn.execute(text("SELECT pg_advisory_unlock(hashtext('recall_learning_write'))"))
                     
         except IntegrityError as e:
             logger.error(f"Integrity error saving learning: {e}")
@@ -201,33 +210,34 @@ class LearningStore:
         try:
             embedding = self._get_embedding(query)
             
-            with self.engine.connect() as conn:
-                result = conn.execute(
-                    text("""
-                        SELECT * FROM search_similar_learnings(
-                            :embedding::vector,
-                            :limit,
-                            :min_similarity
-                        )
-                    """),
-                    {
-                        "embedding": str(embedding),
-                        "limit": limit,
-                        "min_similarity": min_similarity,
-                    }
-                )
-                
-                learnings = []
-                for row in result:
-                    learnings.append(Learning(
-                        id=row.id,
-                        title=row.title,
-                        error_pattern=row.error_pattern,
-                        fix_description=row.fix_description,
-                        similarity=row.similarity,
-                    ))
-                
-                return learnings
+            with track_vector_search_latency("hybrid"):
+                with self.engine.connect() as conn:
+                    result = conn.execute(
+                        text("""
+                            SELECT * FROM search_similar_learnings(
+                                :embedding::vector,
+                                :limit,
+                                :min_similarity
+                            )
+                        """),
+                        {
+                            "embedding": str(embedding),
+                            "limit": limit,
+                            "min_similarity": min_similarity,
+                        }
+                    )
+                    
+                    learnings = []
+                    for row in result:
+                        learnings.append(Learning(
+                            id=row.id,
+                            title=row.title,
+                            error_pattern=row.error_pattern,
+                            fix_description=row.fix_description,
+                            similarity=row.similarity,
+                        ))
+                    
+                    return learnings
                 
         except OperationalError as e:
             logger.error(f"Database connection error: {e}")

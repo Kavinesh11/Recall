@@ -43,13 +43,10 @@ spec:
             - secretRef:
                 name: recall-secrets
           env:
-            - name: DB_URL
-              value: "postgresql://recall_user:pass@recall-db-service:5432/recall"
             - name: ENABLE_AUTH
               value: "true"
             - name: ARCHESTRA_TOKEN_ENDPOINT
               value: "http://archestra-gateway:8080/auth/validate"
-            - name: POD_NAME
             - name: POD_NAME
               valueFrom:
                 fieldRef:
